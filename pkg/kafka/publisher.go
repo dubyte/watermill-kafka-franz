@@ -90,18 +90,13 @@ func (p *Publisher) Publish(topic string, msgs ...*message.Message) error {
 			return fmt.Errorf("cannot marshal message %s: %w", msg.UUID, err)
 		}
 
-		// Set context for cancellation/timeout
-		// Note: We don't use msg.Context() here because it may be cancelled
-		// The record context is used for request-scoped values, not for cancellation
 		record.Context = context.Background()
 		records[i] = record
 	}
 
-	// Use background context for publishing
-	// Message contexts may be cancelled and shouldn't affect publishing
-	ctx := context.Background()
+	ctx, ctxCancel := context.WithTimeout(context.Background(), p.config.ProduceRequestTimeout)
+	defer ctxCancel()
 
-	// Synchronous production
 	result := p.client.ProduceSync(ctx, records...)
 	if err := result.FirstErr(); err != nil {
 		return fmt.Errorf("cannot produce messages: %w", err)
