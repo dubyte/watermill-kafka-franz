@@ -40,3 +40,6 @@ coverage.txt
 # Local env files
 .env
 .env.local
+
+# Agent context (local development notes)
+AGENTS.md
