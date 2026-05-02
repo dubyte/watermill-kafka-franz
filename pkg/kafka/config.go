@@ -195,15 +195,15 @@ func DefaultPublisherConfig() PublisherConfig {
 // DefaultSubscriberConfig returns a SubscriberConfig with sensible defaults.
 func DefaultSubscriberConfig() SubscriberConfig {
 	return SubscriberConfig{
-		AutoOffsetReset:        "latest",
-		HeartbeatInterval:      3 * time.Second,
-		SessionTimeout:         45 * time.Second,
-		RebalanceTimeout:       60 * time.Second,
-		AutoCommitInterval:     5 * time.Second,
-		FetchMinBytes:          1,
-		FetchMaxBytes:          50 << 20, // 50MB
-		FetchMaxPartitionBytes: 1 << 20,  // 1MB
-		FetchMaxWait:           5 * time.Second,
+		AutoOffsetReset:                  "latest",
+		HeartbeatInterval:                3 * time.Second,
+		SessionTimeout:                   45 * time.Second,
+		RebalanceTimeout:                 60 * time.Second,
+		AutoCommitInterval:               5 * time.Second,
+		FetchMinBytes:                    1,
+		FetchMaxBytes:                    50 << 20, // 50MB
+		FetchMaxPartitionBytes:           1 << 20,  // 1MB
+		FetchMaxWait:                     5 * time.Second,
 		NackResendSleep:                  100 * time.Millisecond,
 		ClientID:                         "watermill",
 		InitializeTopicPartitions:        1,

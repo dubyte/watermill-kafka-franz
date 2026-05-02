@@ -198,20 +198,20 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 				return
 			}
 
-		// Handle errors - log them but still process any valid records in this fetch.
-		// A single fetch can contain both errors and valid records.
-		for _, err := range fetches.Errors() {
-			// Skip context canceled errors (normal shutdown)
-			if err.Err == context.Canceled {
-				continue
+			// Handle errors - log them but still process any valid records in this fetch.
+			// A single fetch can contain both errors and valid records.
+			for _, err := range fetches.Errors() {
+				// Skip context canceled errors (normal shutdown)
+				if err.Err == context.Canceled {
+					continue
+				}
+				// Log all errors but don't exit - franz-go handles retries internally
+				s.logger.Debug("Fetch error", watermill.LogFields{
+					"error":     err.Err.Error(),
+					"topic":     err.Topic,
+					"partition": err.Partition,
+				})
 			}
-			// Log all errors but don't exit - franz-go handles retries internally
-			s.logger.Debug("Fetch error", watermill.LogFields{
-				"error":     err.Err.Error(),
-				"topic":     err.Topic,
-				"partition": err.Partition,
-			})
-		}
 
 			// Process records
 			iter := fetches.RecordIter()
@@ -221,7 +221,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 					continue
 				}
 
-			msg, err := s.config.Unmarshaler.Unmarshal(record)
+				msg, err := s.config.Unmarshaler.Unmarshal(record)
 				if err != nil {
 					s.logger.Error("Cannot unmarshal message", err, nil)
 					continue
