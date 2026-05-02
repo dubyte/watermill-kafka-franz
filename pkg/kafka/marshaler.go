@@ -68,3 +68,56 @@ func (DefaultMarshaler) Unmarshal(record *kgo.Record) (*message.Message, error) 
 
 	return msg, nil
 }
+
+// PartitionedMarshaler is a marshaler that uses message UUID as the Kafka key
+// to ensure messages with the same key are routed to the same partition.
+// This enables ordered delivery within each partition.
+type PartitionedMarshaler struct{}
+
+// Marshal converts a Watermill message to a Kafka record with UUID as key.
+func (PartitionedMarshaler) Marshal(topic string, msg *message.Message) (*kgo.Record, error) {
+	// Reject reserved header key
+	if value := msg.Metadata.Get(UUIDHeaderKey); value != "" {
+		return nil, errors.Errorf("metadata %s is reserved for message UUID", UUIDHeaderKey)
+	}
+
+	// Build headers: UUID header + metadata headers
+	headers := make([]kgo.RecordHeader, 0, len(msg.Metadata)+1)
+	headers = append(headers, kgo.RecordHeader{
+		Key:   UUIDHeaderKey,
+		Value: []byte(msg.UUID),
+	})
+
+	for key, value := range msg.Metadata {
+		headers = append(headers, kgo.RecordHeader{
+			Key:   key,
+			Value: []byte(value),
+		})
+	}
+
+	return &kgo.Record{
+		Topic:   topic,
+		Key:     []byte(msg.UUID), // Use UUID as key for partitioning
+		Value:   msg.Payload,
+		Headers: headers,
+	}, nil
+}
+
+// Unmarshal converts a Kafka record to a Watermill message.
+func (PartitionedMarshaler) Unmarshal(record *kgo.Record) (*message.Message, error) {
+	var messageID string
+	metadata := make(message.Metadata, len(record.Headers))
+
+	for _, header := range record.Headers {
+		if header.Key == UUIDHeaderKey {
+			messageID = string(header.Value)
+		} else {
+			metadata.Set(header.Key, string(header.Value))
+		}
+	}
+
+	msg := message.NewMessage(messageID, record.Value)
+	msg.Metadata = metadata
+
+	return msg, nil
+}

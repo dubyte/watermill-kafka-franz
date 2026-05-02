@@ -19,7 +19,7 @@ go.work
 go.work.sum
 
 # Go modules
-go.sum
+# go.sum is not ignored for libraries to ensure reproducible builds
 
 # IDE
 .idea/

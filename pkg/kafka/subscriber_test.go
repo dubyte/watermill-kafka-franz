@@ -14,12 +14,12 @@ func TestSubscribeInitialize_CreatesTopic(t *testing.T) {
 	}
 
 	config := DefaultSubscriberConfig()
-	config.Brokers = []string{"localhost:9092"}
+	config.Brokers = []string{"127.0.0.1:9092"}
 
 	logger := watermill.NewStdLogger(false, false)
 	subscriber, err := NewSubscriber(config, logger)
 	require.NoError(t, err)
-	defer subscriber.Close()
+	defer func() { _ = subscriber.Close() }()
 
 	topic := "test-subscribe-initialize-" + watermill.NewUUID()
 
@@ -38,12 +38,12 @@ func TestSubscribeInitialize_TopicAlreadyExists(t *testing.T) {
 	}
 
 	config := DefaultSubscriberConfig()
-	config.Brokers = []string{"localhost:9092"}
+	config.Brokers = []string{"127.0.0.1:9092"}
 
 	logger := watermill.NewStdLogger(false, false)
 	subscriber, err := NewSubscriber(config, logger)
 	require.NoError(t, err)
-	defer subscriber.Close()
+	defer func() { _ = subscriber.Close() }()
 
 	topic := "test-subscribe-initialize-existing-" + watermill.NewUUID()
 
@@ -58,7 +58,7 @@ func TestSubscribeInitialize_TopicAlreadyExists(t *testing.T) {
 
 func TestSubscribeInitialize_ClosedSubscriber(t *testing.T) {
 	config := DefaultSubscriberConfig()
-	config.Brokers = []string{"localhost:9092"}
+	config.Brokers = []string{"127.0.0.1:9092"}
 
 	logger := watermill.NewStdLogger(false, false)
 	subscriber, err := NewSubscriber(config, logger)

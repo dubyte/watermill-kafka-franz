@@ -83,7 +83,7 @@ func TestConfigWithOverwriteKgoOpts(t *testing.T) {
 	// Test PublisherConfig with custom kgo options
 	pubConfig := DefaultPublisherConfig()
 	pubConfig.OverwriteKgoOpts = []kgo.Opt{
-		kgo.SeedBrokers("localhost:9092"),
+		kgo.SeedBrokers("127.0.0.1:9092"),
 	}
 
 	if len(pubConfig.OverwriteKgoOpts) != 1 {
@@ -93,7 +93,7 @@ func TestConfigWithOverwriteKgoOpts(t *testing.T) {
 	// Test SubscriberConfig with custom kgo options
 	subConfig := DefaultSubscriberConfig()
 	subConfig.OverwriteKgoOpts = []kgo.Opt{
-		kgo.SeedBrokers("localhost:9092"),
+		kgo.SeedBrokers("127.0.0.1:9092"),
 		kgo.ConsumerGroup("test-group"),
 	}
 

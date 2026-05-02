@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    container: golangci/golangci-lint:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run golangci-lint
+        run: golangci-lint run -v ./...
+
+  test:
+    name: Test
+    needs: lint  # Only run tests if lint passes
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+
+      - name: Start Kafka
+        if: ${{ env.ACT != 'true' }}
+        run: docker compose up -d
+
+      - name: Wait for Kafka
+        if: ${{ env.ACT != 'true' }}
+        run: |
+          timeout 120s bash -c 'until docker compose exec kafka kafka-broker-api-versions --bootstrap-server localhost:9092; do sleep 5; done'
+          echo "Kafka is ready!"
+
+      - name: Run Tests
+        run: go test -v -race -timeout 30m ./...
+
+      - name: Stop Kafka
+        if: ${{ always() && env.ACT != 'true' }}
+        run: docker compose down

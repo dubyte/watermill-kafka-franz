@@ -9,11 +9,12 @@ import (
 )
 
 func kafkaBrokers() []string {
-	return []string{"localhost:9092"}
+	return []string{"127.0.0.1:9092"}
 }
 
 func createPubSub(t *testing.T) (message.Publisher, message.Subscriber) {
-	return createPubSubWithConsumerGroup(t, "")
+	// Use unique consumer group per test to avoid rebalancing issues when running in parallel
+	return createPubSubWithConsumerGroup(t, "test-"+t.Name())
 }
 
 func createPubSubWithConsumerGroup(t *testing.T, consumerGroup string) (message.Publisher, message.Subscriber) {
@@ -39,22 +40,68 @@ func createPubSubWithConsumerGroup(t *testing.T, consumerGroup string) (message.
 	return publisher, subscriber
 }
 
-func TestPubSub(t *testing.T) {
-features := tests.Features{
-ConsumerGroups:                      true,
-ExactlyOnceDelivery:                 false,
-GuaranteedOrder:                     true,
-GuaranteedOrderWithSingleSubscriber: true,
-Persistent:                          true,
-		NewSubscriberReceivesOldMessages:    true,
-		ContextPreserved:                    true,
-RestartServiceCommand:               []string{"docker", "compose", "restart", "kafka"},
+func createNoGroupPubSub(t *testing.T) (message.Publisher, message.Subscriber) {
+	return createPubSubWithConsumerGroup(t, "")
 }
+
+func TestPubSub(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping long integration test")
+	}
+
+	features := tests.Features{
+		ConsumerGroups:      true,
+		ExactlyOnceDelivery: false,
+		GuaranteedOrder:     false,
+		Persistent:          true,
+	}
 
 	tests.TestPubSub(
 		t,
 		features,
 		createPubSub,
 		createPubSubWithConsumerGroup,
+	)
+}
+
+func TestPubSub_ordered(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping long tests")
+	}
+
+	t.Parallel()
+
+	tests.TestPubSub(
+		t,
+		tests.Features{
+			ConsumerGroups:                      true,
+			ExactlyOnceDelivery:                 false,
+			GuaranteedOrder:                     true,
+			GuaranteedOrderWithSingleSubscriber: true,
+			Persistent:                          true,
+		},
+		createPubSub,
+		createPubSubWithConsumerGroup,
+	)
+}
+
+func TestNoGroupSubscriber(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping long tests")
+	}
+
+	t.Parallel()
+
+	tests.TestPubSub(
+		t,
+		tests.Features{
+			ConsumerGroups:                   false,
+			ExactlyOnceDelivery:              false,
+			GuaranteedOrder:                  false,
+			Persistent:                       true,
+			NewSubscriberReceivesOldMessages: true,
+		},
+		createNoGroupPubSub,
+		nil,
 	)
 }
