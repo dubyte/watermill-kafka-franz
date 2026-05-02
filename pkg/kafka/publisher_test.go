@@ -75,7 +75,7 @@ func TestPublisher_Publish_SingleMessage(t *testing.T) {
 	logger := watermill.NewStdLogger(false, false)
 	publisher, err := NewPublisher(config, logger)
 	require.NoError(t, err)
-	defer publisher.Close()
+	defer func() { _ = publisher.Close() }()
 
 	topic := "test-topic-" + watermill.NewUUID()
 
@@ -108,7 +108,7 @@ func TestPublisher_Publish_MultipleMessages(t *testing.T) {
 	logger := watermill.NewStdLogger(false, false)
 	publisher, err := NewPublisher(config, logger)
 	require.NoError(t, err)
-	defer publisher.Close()
+	defer func() { _ = publisher.Close() }()
 
 	topic := "test-topic-" + watermill.NewUUID()
 
@@ -143,7 +143,7 @@ func TestPublisher_Publish_EmptyMessages(t *testing.T) {
 	logger := watermill.NewStdLogger(false, false)
 	publisher, err := NewPublisher(config, logger)
 	require.NoError(t, err)
-	defer publisher.Close()
+	defer func() { _ = publisher.Close() }()
 
 	// Publishing zero messages should not error
 	err = publisher.Publish("test-topic")
@@ -200,7 +200,7 @@ func TestPublisher_Publish_WithCustomMarshaler(t *testing.T) {
 	logger := watermill.NewStdLogger(false, false)
 	publisher, err := NewPublisher(config, logger)
 	require.NoError(t, err)
-	defer publisher.Close()
+	defer func() { _ = publisher.Close() }()
 
 	assert.Equal(t, config.Marshaler, publisher.config.Marshaler)
 }
@@ -213,7 +213,7 @@ func TestPublisher_Publish_MarshalError(t *testing.T) {
 	logger := watermill.NewStdLogger(false, false)
 	publisher, err := NewPublisher(config, logger)
 	require.NoError(t, err)
-	defer publisher.Close()
+	defer func() { _ = publisher.Close() }()
 
 	msg := message.NewMessage(watermill.NewUUID(), []byte("test"))
 	topic := "test-topic-" + watermill.NewUUID()

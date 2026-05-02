@@ -17,12 +17,17 @@ import (
 // Subscriber implements message.Subscriber interface using franz-go.
 type Subscriber struct {
 	config SubscriberConfig
-	client *kgo.Client
 	logger watermill.LoggerAdapter
+
+	// adminClient is used for SubscribeInitialize
+	adminClient *kgo.Client
 
 	closing       chan struct{}
 	subscribersWg sync.WaitGroup
 	closed        uint32 // atomic
+
+	subClientsMu sync.Mutex
+	subClients   []*kgo.Client
 }
 
 // NewSubscriber creates a new Kafka Subscriber.
@@ -33,66 +38,29 @@ func NewSubscriber(config SubscriberConfig, logger watermill.LoggerAdapter) (*Su
 		logger = watermill.NopLogger{}
 	}
 
-	opts := []kgo.Opt{
+	// Create an admin client for SubscribeInitialize
+	adminOpts := []kgo.Opt{
 		kgo.SeedBrokers(config.Brokers...),
-		kgo.FetchMinBytes(config.FetchMinBytes),
-		kgo.FetchMaxBytes(config.FetchMaxBytes),
-		kgo.FetchMaxPartitionBytes(config.FetchMaxPartitionBytes),
-		kgo.FetchMaxWait(config.FetchMaxWait),
-		kgo.ClientID(config.ClientID),
-		kgo.Rack(config.RackID),
-		kgo.AllowAutoTopicCreation(),
+		kgo.ClientID(config.ClientID + "-admin"),
 	}
-
-	// Consumer group configuration
-	if config.ConsumerGroup != "" {
-		opts = append(opts,
-			kgo.ConsumerGroup(config.ConsumerGroup),
-			kgo.HeartbeatInterval(config.HeartbeatInterval),
-			kgo.SessionTimeout(config.SessionTimeout),
-			kgo.RebalanceTimeout(config.RebalanceTimeout),
-		)
-
-		// Auto-commit configuration
-		if !config.DisableAutoCommit {
-			opts = append(opts,
-				kgo.AutoCommitMarks(),
-				kgo.AutoCommitInterval(config.AutoCommitInterval),
-			)
-		}
-	}
-
-	// Offset reset policy (applies to both consumer group and direct consumption)
-	switch config.AutoOffsetReset {
-	case "earliest":
-		opts = append(opts, kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
-	case "latest":
-		opts = append(opts, kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()))
-	case "none":
-		opts = append(opts, kgo.ConsumeResetOffset(kgo.NewOffset().AtCommitted()))
-	}
-
 	if config.TLS != nil {
-		opts = append(opts, kgo.DialTLSConfig(config.TLS))
+		adminOpts = append(adminOpts, kgo.DialTLSConfig(config.TLS))
 	}
-
 	if config.SASLMechanism != nil {
-		opts = append(opts, kgo.SASL(config.SASLMechanism))
+		adminOpts = append(adminOpts, kgo.SASL(config.SASLMechanism))
 	}
+	adminOpts = append(adminOpts, config.OverwriteKgoOpts...)
 
-	// Allow overriding with custom opts
-	opts = append(opts, config.OverwriteKgoOpts...)
-
-	client, err := kgo.NewClient(opts...)
+	adminClient, err := kgo.NewClient(adminOpts...)
 	if err != nil {
-		return nil, errors.Wrap(err, "cannot create kafka client")
+		return nil, errors.Wrap(err, "cannot create admin kafka client")
 	}
 
 	return &Subscriber{
-		config:  config,
-		client:  client,
-		logger:  logger,
-		closing: make(chan struct{}),
+		config:      config,
+		logger:      logger,
+		adminClient: adminClient,
+		closing:     make(chan struct{}),
 	}, nil
 }
 
@@ -133,12 +101,27 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 		return nil, errors.New("subscriber closed")
 	}
 
+	// Create a new client for this subscription to ensure isolation.
+	// Dedicated clients are used to prevent cross-topic message "stealing"
+	// in concurrent polling scenarios.
+	opts := s.subscriberOptions(topic)
+
+	client, err := kgo.NewClient(opts...)
+	if err != nil {
+		return nil, errors.Wrap(err, "cannot create kafka client")
+	}
+
+	s.subClientsMu.Lock()
+	s.subClients = append(s.subClients, client)
+	s.subClientsMu.Unlock()
+
 	output := make(chan *message.Message)
 	s.subscribersWg.Add(1)
 
 	go func() {
 		defer s.subscribersWg.Done()
 		defer close(output)
+		defer client.Close()
 
 		// Create a context that is cancelled when the subscriber is closing
 		runCtx, cancel := context.WithCancel(ctx)
@@ -152,34 +135,13 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 			}
 		}()
 
-		// Add topic to consumption
-		s.client.AddConsumeTopics(topic)
-
-		// Wait for consumer to be ready (especially important for consumer groups)
-		// Do an initial poll with timeout to allow group rebalancing
-		readyCtx, readyCancel := context.WithTimeout(runCtx, 10*time.Second)
-		fetches := s.client.PollFetches(readyCtx)
-		readyCancel()
-
-		// Log any initial errors but don't fail - consumer may still be joining
-		if errs := fetches.Errors(); len(errs) > 0 {
-			for _, err := range errs {
-				if err.Err != context.DeadlineExceeded && err.Err != context.Canceled {
-					s.logger.Debug("Initial poll error (expected during startup)", watermill.LogFields{
-						"error":     err.Err.Error(),
-						"topic":     err.Topic,
-						"partition": err.Partition,
-					})
-				}
-			}
-		}
-
-		// Small delay to ensure consumer is fully ready
-		time.Sleep(100 * time.Millisecond)
+		// Wait for consumer group to join and get partition assignments
+		// This is critical for tests to ensure consumer is ready before messages are published
+		time.Sleep(2 * time.Second)
 
 		for {
 			// Poll for records
-			fetches := s.client.PollFetches(runCtx)
+			fetches := client.PollFetches(runCtx)
 
 			// Check if we should exit
 			if fetches.IsClientClosed() {
@@ -225,6 +187,12 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 					continue
 				}
 
+				// Topic filtering is not strictly necessary here because each client is topic-isolated,
+				// but it's good practice.
+				if record.Topic != topic {
+					continue
+				}
+
 				msg, err := s.config.Unmarshaler.Unmarshal(record)
 				if err != nil {
 					s.logger.Error("Cannot unmarshal message", err, nil)
@@ -232,8 +200,8 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 				}
 
 				// Enrich context with Kafka metadata
-				// Use context.Background() as base to avoid carrying over cancellation from runCtx
-				recordCtx := setPartitionToCtx(context.Background(), record.Partition)
+				// Use context.WithoutCancel to preserve values but avoid carrying over cancellation
+				recordCtx := setPartitionToCtx(context.WithoutCancel(runCtx), record.Partition)
 				recordCtx = setPartitionOffsetToCtx(recordCtx, record.Offset)
 				recordCtx = setMessageTimestampToCtx(recordCtx, record.Timestamp)
 				recordCtx = setMessageKeyToCtx(recordCtx, record.Key)
@@ -241,7 +209,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 				msgCtx, cancelMsg := context.WithCancel(recordCtx)
 				msg.SetContext(msgCtx)
 
-				if err := s.handleMessage(msg, output, record, cancelMsg); err != nil {
+				if err := s.handleMessage(runCtx, client, msg, output, record, cancelMsg); err != nil {
 					return
 				}
 			}
@@ -251,7 +219,64 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 	return output, nil
 }
 
+func (s *Subscriber) subscriberOptions(topic string) []kgo.Opt {
+	opts := []kgo.Opt{
+		kgo.SeedBrokers(s.config.Brokers...),
+		kgo.FetchMinBytes(s.config.FetchMinBytes),
+		kgo.FetchMaxBytes(s.config.FetchMaxBytes),
+		kgo.FetchMaxPartitionBytes(s.config.FetchMaxPartitionBytes),
+		kgo.FetchMaxWait(s.config.FetchMaxWait),
+		kgo.ClientID(s.config.ClientID),
+		kgo.Rack(s.config.RackID),
+		kgo.ConsumeTopics(topic),
+		kgo.AllowAutoTopicCreation(),
+	}
+
+	// Consumer group configuration
+	if s.config.ConsumerGroup != "" {
+		opts = append(opts,
+			kgo.ConsumerGroup(s.config.ConsumerGroup),
+			kgo.HeartbeatInterval(s.config.HeartbeatInterval),
+			kgo.SessionTimeout(s.config.SessionTimeout),
+			kgo.RebalanceTimeout(s.config.RebalanceTimeout),
+		)
+
+		// Auto-commit configuration
+		if !s.config.DisableAutoCommit {
+			opts = append(opts,
+				kgo.AutoCommitMarks(),
+				kgo.AutoCommitInterval(s.config.AutoCommitInterval),
+			)
+		}
+	}
+
+	// Offset reset policy
+	switch s.config.AutoOffsetReset {
+	case "earliest":
+		opts = append(opts, kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
+	case "latest":
+		opts = append(opts, kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()))
+	case "none":
+		opts = append(opts, kgo.ConsumeResetOffset(kgo.NewOffset().AtCommitted()))
+	}
+
+	if s.config.TLS != nil {
+		opts = append(opts, kgo.DialTLSConfig(s.config.TLS))
+	}
+
+	if s.config.SASLMechanism != nil {
+		opts = append(opts, kgo.SASL(s.config.SASLMechanism))
+	}
+
+	// Allow overriding with custom opts
+	opts = append(opts, s.config.OverwriteKgoOpts...)
+
+	return opts
+}
+
 func (s *Subscriber) handleMessage(
+	ctx context.Context,
+	client *kgo.Client,
 	msg *message.Message,
 	output chan *message.Message,
 	record *kgo.Record,
@@ -272,11 +297,11 @@ ResendLoop:
 		select {
 		case <-msg.Acked():
 			// Mark for commit
-			s.client.MarkCommitRecords(record)
+			client.MarkCommitRecords(record)
 
 			// Manual commit if auto-commit disabled
 			if s.config.DisableAutoCommit {
-				if err := s.client.CommitRecords(msg.Context(), record); err != nil {
+				if err := client.CommitRecords(msg.Context(), record); err != nil {
 					s.logger.Error("Cannot commit offset", err, nil)
 				}
 			}
@@ -288,14 +313,13 @@ ResendLoop:
 			msg.SetContext(setPartitionToCtx(
 				setPartitionOffsetToCtx(
 					setMessageTimestampToCtx(
-						setMessageKeyToCtx(context.Background(), record.Key),
+						setMessageKeyToCtx(ctx, record.Key),
 						record.Timestamp,
 					),
 					record.Offset,
 				),
 				record.Partition,
 			))
-
 			if s.config.NackResendSleep > 0 {
 				time.Sleep(s.config.NackResendSleep)
 			}
@@ -320,9 +344,16 @@ func (s *Subscriber) Close() error {
 	s.logger.Debug("Subscriber: closing subscriber", nil)
 	close(s.closing)
 	s.subscribersWg.Wait()
-	s.logger.Debug("Subscriber: all subscribers finished, closing client", nil)
-	s.client.Close()
-	s.logger.Debug("Subscriber: client closed", nil)
+
+	s.subClientsMu.Lock()
+	for _, client := range s.subClients {
+		client.Close()
+	}
+	s.subClients = nil
+	s.subClientsMu.Unlock()
+
+	s.adminClient.Close()
+	s.logger.Debug("Subscriber: all clients closed", nil)
 
 	return nil
 }
@@ -335,9 +366,7 @@ func (s *Subscriber) SubscribeInitialize(topic string) error {
 	}
 
 	// Create admin client
-	adminClient := kadm.NewClient(s.client)
-	// Note: Don't close adminClient here - it wraps the shared client
-	// and closing it would close the underlying client
+	adminClient := kadm.NewClient(s.adminClient)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

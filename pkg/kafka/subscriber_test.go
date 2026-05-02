@@ -19,7 +19,7 @@ func TestSubscribeInitialize_CreatesTopic(t *testing.T) {
 	logger := watermill.NewStdLogger(false, false)
 	subscriber, err := NewSubscriber(config, logger)
 	require.NoError(t, err)
-	defer subscriber.Close()
+	defer func() { _ = subscriber.Close() }()
 
 	topic := "test-subscribe-initialize-" + watermill.NewUUID()
 
@@ -43,7 +43,7 @@ func TestSubscribeInitialize_TopicAlreadyExists(t *testing.T) {
 	logger := watermill.NewStdLogger(false, false)
 	subscriber, err := NewSubscriber(config, logger)
 	require.NoError(t, err)
-	defer subscriber.Close()
+	defer func() { _ = subscriber.Close() }()
 
 	topic := "test-subscribe-initialize-existing-" + watermill.NewUUID()
 

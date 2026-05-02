@@ -13,7 +13,8 @@ func kafkaBrokers() []string {
 }
 
 func createPubSub(t *testing.T) (message.Publisher, message.Subscriber) {
-	return createPubSubWithConsumerGroup(t, "test")
+	// Use unique consumer group per test to avoid rebalancing issues when running in parallel
+	return createPubSubWithConsumerGroup(t, "test-"+t.Name())
 }
 
 func createPubSubWithConsumerGroup(t *testing.T, consumerGroup string) (message.Publisher, message.Subscriber) {
@@ -44,6 +45,10 @@ func createNoGroupPubSub(t *testing.T) (message.Publisher, message.Subscriber) {
 }
 
 func TestPubSub(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping long integration test")
+	}
+
 	features := tests.Features{
 		ConsumerGroups:      true,
 		ExactlyOnceDelivery: false,
