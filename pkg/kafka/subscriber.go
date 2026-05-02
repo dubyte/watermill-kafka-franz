@@ -311,9 +311,11 @@ ResendLoop:
 
 			// Manual commit if auto-commit disabled
 			if s.config.DisableAutoCommit {
-				if err := client.CommitRecords(msg.Context(), record); err != nil {
+				commitCtx, commitCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				if err := client.CommitRecords(commitCtx, record); err != nil {
 					s.logger.Error("Cannot commit offset", err, nil)
 				}
+				commitCancel()
 			}
 			break ResendLoop
 
