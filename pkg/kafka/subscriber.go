@@ -187,13 +187,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 					continue
 				}
 
-				// Topic filtering is not strictly necessary here because each client is topic-isolated,
-				// but it's good practice.
-				if record.Topic != topic {
-					continue
-				}
-
-				msg, err := s.config.Unmarshaler.Unmarshal(record)
+			msg, err := s.config.Unmarshaler.Unmarshal(record)
 				if err != nil {
 					s.logger.Error("Cannot unmarshal message", err, nil)
 					continue
