@@ -108,7 +108,7 @@ type SubscriberConfig struct {
 	FetchMaxWait time.Duration
 
 	// NackResendSleep sets how long to sleep before resending a nacked message.
-	// Defaults to 100ms. Set to 0 for no sleep.
+	// Defaults to 0 (no sleep). Use DefaultSubscriberConfig() for a pre-filled 100ms default.
 	NackResendSleep time.Duration
 
 	// TLS configuration for secure connections.

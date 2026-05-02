@@ -262,7 +262,8 @@ func (s *Subscriber) subscriberOptions(topic string) []kgo.Opt {
 	if s.config.ConsumerGroup != "" {
 		opts = append(opts,
 			kgo.ConsumerGroup(s.config.ConsumerGroup),
-			kgo.BlockRebalanceOnPoll(),
+			// BlockRebalanceOnPoll is NOT enabled: handleMessage blocks per-record
+			// waiting for Ack/Nack, which would prevent rebalances and deadlock.
 			kgo.HeartbeatInterval(s.config.HeartbeatInterval),
 			kgo.SessionTimeout(s.config.SessionTimeout),
 			kgo.RebalanceTimeout(s.config.RebalanceTimeout),
