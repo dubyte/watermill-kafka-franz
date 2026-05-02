@@ -93,6 +93,15 @@ func setSubscriberDefaults(config SubscriberConfig) SubscriberConfig {
 	if config.FetchMaxWait == 0 {
 		config.FetchMaxWait = 5 * time.Second
 	}
+	if config.FetchMinBytes == 0 {
+		config.FetchMinBytes = 1
+	}
+	if config.NackResendSleep == 0 {
+		config.NackResendSleep = 100 * time.Millisecond
+	}
+	if config.ClientID == "" {
+		config.ClientID = "watermill"
+	}
 	return config
 }
 
