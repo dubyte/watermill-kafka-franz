@@ -9,8 +9,6 @@
 # The Kafka broker is available at localhost:9092
 # Internal communication uses kafka:29092
 
-version: '3.8'
-
 services:
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
