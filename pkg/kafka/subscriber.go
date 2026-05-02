@@ -100,9 +100,7 @@ func setSubscriberDefaults(config SubscriberConfig) SubscriberConfig {
 	if config.FetchMinBytes == 0 {
 		config.FetchMinBytes = 1
 	}
-	if config.NackResendSleep == 0 {
-		config.NackResendSleep = 100 * time.Millisecond
-	}
+
 	if config.ClientID == "" {
 		config.ClientID = "watermill"
 	}
@@ -264,6 +262,7 @@ func (s *Subscriber) subscriberOptions(topic string) []kgo.Opt {
 	if s.config.ConsumerGroup != "" {
 		opts = append(opts,
 			kgo.ConsumerGroup(s.config.ConsumerGroup),
+			kgo.BlockRebalanceOnPoll(),
 			kgo.HeartbeatInterval(s.config.HeartbeatInterval),
 			kgo.SessionTimeout(s.config.SessionTimeout),
 			kgo.RebalanceTimeout(s.config.RebalanceTimeout),
