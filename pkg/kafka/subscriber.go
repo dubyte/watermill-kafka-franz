@@ -318,12 +318,11 @@ ResendLoop:
 			break ResendLoop
 
 		case <-msg.Nacked():
-			// Copy and retry
 			msg = msg.Copy()
 			msg.SetContext(ContextWithPartition(
 				ContextWithOffset(
 					ContextWithTimestamp(
-						ContextWithKey(ctx, record.Key),
+						ContextWithKey(context.WithoutCancel(ctx), record.Key),
 						record.Timestamp,
 					),
 					record.Offset,
