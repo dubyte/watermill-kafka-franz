@@ -106,6 +106,12 @@ func setSubscriberDefaults(config SubscriberConfig) SubscriberConfig {
 	if config.ClientID == "" {
 		config.ClientID = "watermill"
 	}
+	if config.InitializeTopicPartitions == 0 {
+		config.InitializeTopicPartitions = 1
+	}
+	if config.InitializeTopicReplicationFactor == 0 {
+		config.InitializeTopicReplicationFactor = 1
+	}
 	return config
 }
 
@@ -391,7 +397,7 @@ func (s *Subscriber) SubscribeInitialize(topic string) error {
 	}
 
 	// Create topic with default config (1 partition, replication factor 1)
-	resp, err := adminClient.CreateTopics(ctx, 1, 1, nil, topic)
+	resp, err := adminClient.CreateTopics(ctx, s.config.InitializeTopicPartitions, s.config.InitializeTopicReplicationFactor, nil, topic)
 	if err != nil {
 		return fmt.Errorf("cannot create topic: %w", err)
 	}

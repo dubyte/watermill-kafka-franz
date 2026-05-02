@@ -127,6 +127,14 @@ type SubscriberConfig struct {
 	// OverwriteKgoOpts allows passing arbitrary franz-go options.
 	// Use with caution - these options may override settings above.
 	OverwriteKgoOpts []kgo.Opt
+
+	// InitializeTopicPartitions is the number of partitions for topics created by SubscribeInitialize.
+	// Defaults to 1.
+	InitializeTopicPartitions int32
+
+	// InitializeTopicReplicationFactor is the replication factor for topics created by SubscribeInitialize.
+	// Defaults to 1.
+	InitializeTopicReplicationFactor int16
 }
 
 // Validate checks that the PublisherConfig has all required fields set.
@@ -196,7 +204,9 @@ func DefaultSubscriberConfig() SubscriberConfig {
 		FetchMaxBytes:          50 << 20, // 50MB
 		FetchMaxPartitionBytes: 1 << 20,  // 1MB
 		FetchMaxWait:           5 * time.Second,
-		NackResendSleep:        100 * time.Millisecond,
-		ClientID:               "watermill",
+		NackResendSleep:                  100 * time.Millisecond,
+		ClientID:                         "watermill",
+		InitializeTopicPartitions:        1,
+		InitializeTopicReplicationFactor: 1,
 	}
 }
