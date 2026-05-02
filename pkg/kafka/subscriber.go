@@ -2,13 +2,14 @@ package kafka
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/message"
-	"github.com/pkg/errors"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -53,7 +54,7 @@ func NewSubscriber(config SubscriberConfig, logger watermill.LoggerAdapter) (*Su
 
 	adminClient, err := kgo.NewClient(adminOpts...)
 	if err != nil {
-		return nil, errors.Wrap(err, "cannot create admin kafka client")
+		return nil, fmt.Errorf("cannot create admin kafka client: %w", err)
 	}
 
 	return &Subscriber{
@@ -108,7 +109,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 
 	client, err := kgo.NewClient(opts...)
 	if err != nil {
-		return nil, errors.Wrap(err, "cannot create kafka client")
+		return nil, fmt.Errorf("cannot create kafka client: %w", err)
 	}
 
 	s.subClientsMu.Lock()
@@ -368,7 +369,7 @@ func (s *Subscriber) SubscribeInitialize(topic string) error {
 	// Check if topic exists
 	topics, err := adminClient.ListTopics(ctx)
 	if err != nil {
-		return errors.Wrap(err, "cannot list topics")
+		return fmt.Errorf("cannot list topics: %w", err)
 	}
 
 	if _, exists := topics[topic]; exists {
@@ -379,7 +380,7 @@ func (s *Subscriber) SubscribeInitialize(topic string) error {
 	// Create topic with default config (1 partition, replication factor 1)
 	resp, err := adminClient.CreateTopics(ctx, 1, 1, nil, topic)
 	if err != nil {
-		return errors.Wrap(err, "cannot create topic")
+		return fmt.Errorf("cannot create topic: %w", err)
 	}
 
 	if err := resp[topic].Err; err != nil {
@@ -388,7 +389,7 @@ func (s *Subscriber) SubscribeInitialize(topic string) error {
 			s.logger.Debug("Topic already exists", watermill.LogFields{"topic": topic})
 			return nil
 		}
-		return errors.Wrapf(err, "cannot create topic %s", topic)
+		return fmt.Errorf("cannot create topic %s: %w", topic, err)
 	}
 
 	s.logger.Info("Created Kafka topic", watermill.LogFields{"topic": topic})

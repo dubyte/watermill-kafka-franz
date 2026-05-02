@@ -1,8 +1,9 @@
 package kafka
 
 import (
+	"fmt"
+
 	"github.com/ThreeDotsLabs/watermill/message"
-	"github.com/pkg/errors"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -26,7 +27,7 @@ type DefaultMarshaler struct{}
 func (DefaultMarshaler) Marshal(topic string, msg *message.Message) (*kgo.Record, error) {
 	// Reject reserved header key
 	if value := msg.Metadata.Get(UUIDHeaderKey); value != "" {
-		return nil, errors.Errorf("metadata %s is reserved for message UUID", UUIDHeaderKey)
+		return nil, fmt.Errorf("metadata %s is reserved for message UUID", UUIDHeaderKey)
 	}
 
 	// Build headers: UUID header + metadata headers
@@ -64,7 +65,7 @@ type PartitionedMarshaler struct{}
 func (PartitionedMarshaler) Marshal(topic string, msg *message.Message) (*kgo.Record, error) {
 	// Reject reserved header key
 	if value := msg.Metadata.Get(UUIDHeaderKey); value != "" {
-		return nil, errors.Errorf("metadata %s is reserved for message UUID", UUIDHeaderKey)
+		return nil, fmt.Errorf("metadata %s is reserved for message UUID", UUIDHeaderKey)
 	}
 
 	// Build headers: UUID header + metadata headers
