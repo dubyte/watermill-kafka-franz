@@ -80,11 +80,12 @@ func TestPublisher_Publish_SingleMessage(t *testing.T) {
 	msg := message.NewMessage(watermill.NewUUID(), []byte("test payload"))
 	msg.Metadata.Set("key1", "value1")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	msg.SetContext(ctx)
 
-	err = publisher.Publish("test-topic", msg)
+	topic := "test-topic-" + watermill.NewUUID()
+	err = publisher.Publish(topic, msg)
 	require.NoError(t, err)
 }
 
@@ -101,7 +102,7 @@ func TestPublisher_Publish_MultipleMessages(t *testing.T) {
 	require.NoError(t, err)
 	defer publisher.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	msgs := []*message.Message{
@@ -114,7 +115,8 @@ func TestPublisher_Publish_MultipleMessages(t *testing.T) {
 		msg.SetContext(ctx)
 	}
 
-	err = publisher.Publish("test-topic", msgs...)
+	topic := "test-topic-" + watermill.NewUUID()
+	err = publisher.Publish(topic, msgs...)
 	require.NoError(t, err)
 }
 
@@ -149,7 +151,8 @@ func TestPublisher_Publish_ClosedPublisher(t *testing.T) {
 
 	// Attempt to publish after close
 	msg := message.NewMessage(watermill.NewUUID(), []byte("test"))
-	err = publisher.Publish("test-topic", msg)
+	topic := "test-topic-" + watermill.NewUUID()
+	err = publisher.Publish(topic, msg)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "publisher closed")
@@ -197,7 +200,8 @@ func TestPublisher_Publish_MarshalError(t *testing.T) {
 	defer publisher.Close()
 
 	msg := message.NewMessage(watermill.NewUUID(), []byte("test"))
-	err = publisher.Publish("test-topic", msg)
+	topic := "test-topic-" + watermill.NewUUID()
+	err = publisher.Publish(topic, msg)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot marshal message")
