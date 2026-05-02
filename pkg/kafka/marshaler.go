@@ -52,21 +52,7 @@ func (DefaultMarshaler) Marshal(topic string, msg *message.Message) (*kgo.Record
 
 // Unmarshal converts a Kafka record to a Watermill message.
 func (DefaultMarshaler) Unmarshal(record *kgo.Record) (*message.Message, error) {
-	var messageID string
-	metadata := make(message.Metadata, len(record.Headers))
-
-	for _, header := range record.Headers {
-		if header.Key == UUIDHeaderKey {
-			messageID = string(header.Value)
-		} else {
-			metadata.Set(header.Key, string(header.Value))
-		}
-	}
-
-	msg := message.NewMessage(messageID, record.Value)
-	msg.Metadata = metadata
-
-	return msg, nil
+	return unmarshalRecord(record)
 }
 
 // PartitionedMarshaler is a marshaler that uses message UUID as the Kafka key
@@ -105,6 +91,13 @@ func (PartitionedMarshaler) Marshal(topic string, msg *message.Message) (*kgo.Re
 
 // Unmarshal converts a Kafka record to a Watermill message.
 func (PartitionedMarshaler) Unmarshal(record *kgo.Record) (*message.Message, error) {
+	return unmarshalRecord(record)
+}
+
+// unmarshalRecord is the shared implementation for unmarshaling Kafka records
+// into Watermill messages. It extracts the UUID from the reserved header and
+// maps remaining headers to message metadata.
+func unmarshalRecord(record *kgo.Record) (*message.Message, error) {
 	var messageID string
 	metadata := make(message.Metadata, len(record.Headers))
 
