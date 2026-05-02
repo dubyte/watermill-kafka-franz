@@ -132,7 +132,6 @@ func TestPublisher_Publish_MultipleMessages(t *testing.T) {
 		msg.SetContext(ctx)
 	}
 
-	topic := "test-topic-" + watermill.NewUUID()
 	err = publisher.Publish(topic, msgs...)
 	require.NoError(t, err)
 }
