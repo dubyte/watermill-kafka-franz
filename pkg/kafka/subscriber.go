@@ -155,8 +155,27 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 		// Add topic to consumption
 		s.client.AddConsumeTopics(topic)
 
-		// Give the client time to set up consumption
-		time.Sleep(500 * time.Millisecond)
+		// Wait for consumer to be ready (especially important for consumer groups)
+		// Do an initial poll with timeout to allow group rebalancing
+		readyCtx, readyCancel := context.WithTimeout(runCtx, 10*time.Second)
+		fetches := s.client.PollFetches(readyCtx)
+		readyCancel()
+
+		// Log any initial errors but don't fail - consumer may still be joining
+		if errs := fetches.Errors(); len(errs) > 0 {
+			for _, err := range errs {
+				if err.Err != context.DeadlineExceeded && err.Err != context.Canceled {
+					s.logger.Debug("Initial poll error (expected during startup)", watermill.LogFields{
+						"error":     err.Err.Error(),
+						"topic":     err.Topic,
+						"partition": err.Partition,
+					})
+				}
+			}
+		}
+
+		// Small delay to ensure consumer is fully ready
+		time.Sleep(100 * time.Millisecond)
 
 		for {
 			// Poll for records
