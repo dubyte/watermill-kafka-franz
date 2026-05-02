@@ -178,6 +178,9 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 			iter := fetches.RecordIter()
 			for !iter.Done() {
 				record := iter.Next()
+				if record == nil {
+					continue
+				}
 
 				msg, err := s.config.Unmarshaler.Unmarshal(record)
 				if err != nil {
@@ -186,12 +189,13 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 				}
 
 				// Enrich context with Kafka metadata
-				ctx := setPartitionToCtx(ctx, record.Partition)
-				ctx = setPartitionOffsetToCtx(ctx, record.Offset)
-				ctx = setMessageTimestampToCtx(ctx, record.Timestamp)
-				ctx = setMessageKeyToCtx(ctx, record.Key)
+				// Use context.Background() as base to avoid carrying over cancellation from previous loops
+				recordCtx := setPartitionToCtx(context.Background(), record.Partition)
+				recordCtx = setPartitionOffsetToCtx(recordCtx, record.Offset)
+				recordCtx = setMessageTimestampToCtx(recordCtx, record.Timestamp)
+				recordCtx = setMessageKeyToCtx(recordCtx, record.Key)
 
-				msgCtx, cancel := context.WithCancel(ctx)
+				msgCtx, cancel := context.WithCancel(recordCtx)
 				msg.SetContext(msgCtx)
 
 				if err := s.handleMessage(msg, output, record, cancel); err != nil {
