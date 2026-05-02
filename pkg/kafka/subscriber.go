@@ -159,7 +159,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 		time.Sleep(2 * time.Second)
 
 		for {
-			// Poll for records
+			client.AllowRebalance()
 			fetches := client.PollFetches(runCtx)
 
 			// Check if we should exit
