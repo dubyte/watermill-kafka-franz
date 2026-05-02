@@ -47,7 +47,6 @@ GuaranteedOrder:                     true,
 GuaranteedOrderWithSingleSubscriber: true,
 Persistent:                          true,
 		NewSubscriberReceivesOldMessages:    true,
-		ContextPreserved:                    true,
 RestartServiceCommand:               []string{"docker", "compose", "restart", "kafka"},
 }
 
