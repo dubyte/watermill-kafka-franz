@@ -126,6 +126,16 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 	// in concurrent polling scenarios.
 	opts := s.subscriberOptions(topic)
 
+	partitionsReady := make(chan struct{}, 1)
+	if s.config.ConsumerGroup != "" {
+		opts = append(opts, kgo.OnPartitionsAssigned(func(_ context.Context, _ *kgo.Client, _ map[string][]int32) {
+			select {
+			case partitionsReady <- struct{}{}:
+			default:
+			}
+		}))
+	}
+
 	client, err := kgo.NewClient(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create kafka client: %w", err)
@@ -154,9 +164,13 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 			}
 		}()
 
-		// Wait for consumer group to join and get partition assignments
-		// This is critical for tests to ensure consumer is ready before messages are published
-		time.Sleep(2 * time.Second)
+		if s.config.ConsumerGroup != "" {
+			select {
+			case <-partitionsReady:
+			case <-runCtx.Done():
+				return
+			}
+		}
 
 		for {
 			client.AllowRebalance()
