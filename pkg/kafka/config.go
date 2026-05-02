@@ -2,6 +2,7 @@ package kafka
 
 import (
 	"crypto/tls"
+	"errors"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -126,6 +127,28 @@ type SubscriberConfig struct {
 	// OverwriteKgoOpts allows passing arbitrary franz-go options.
 	// Use with caution - these options may override settings above.
 	OverwriteKgoOpts []kgo.Opt
+}
+
+// Validate checks that the PublisherConfig has all required fields set.
+func (c PublisherConfig) Validate() error {
+	if len(c.Brokers) == 0 {
+		return errors.New("brokers must not be empty")
+	}
+	if c.Marshaler == nil {
+		return errors.New("marshaler must not be nil")
+	}
+	return nil
+}
+
+// Validate checks that the SubscriberConfig has all required fields set.
+func (c SubscriberConfig) Validate() error {
+	if len(c.Brokers) == 0 {
+		return errors.New("brokers must not be empty")
+	}
+	if c.Unmarshaler == nil {
+		return errors.New("unmarshaler must not be nil")
+	}
+	return nil
 }
 
 // setPublisherDefaults applies default values to zero-value fields in PublisherConfig.

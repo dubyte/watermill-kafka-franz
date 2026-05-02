@@ -35,6 +35,10 @@ type Subscriber struct {
 func NewSubscriber(config SubscriberConfig, logger watermill.LoggerAdapter) (*Subscriber, error) {
 	config = setSubscriberDefaults(config)
 
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid subscriber config: %w", err)
+	}
+
 	if logger == nil {
 		logger = watermill.NopLogger{}
 	}

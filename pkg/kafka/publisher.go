@@ -25,6 +25,10 @@ type Publisher struct {
 func NewPublisher(config PublisherConfig, logger watermill.LoggerAdapter) (*Publisher, error) {
 	setPublisherDefaults(&config)
 
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid publisher config: %w", err)
+	}
+
 	if logger == nil {
 		logger = watermill.NopLogger{}
 	}
