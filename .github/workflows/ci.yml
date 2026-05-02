@@ -27,6 +27,7 @@ jobs:
 
   test:
     name: Test
+    needs: lint  # Only run tests if lint passes
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
