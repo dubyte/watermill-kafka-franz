@@ -14,7 +14,7 @@ func TestSubscribeInitialize_CreatesTopic(t *testing.T) {
 	}
 
 	config := DefaultSubscriberConfig()
-	config.Brokers = []string{"localhost:9092"}
+	config.Brokers = []string{"127.0.0.1:9092"}
 
 	logger := watermill.NewStdLogger(false, false)
 	subscriber, err := NewSubscriber(config, logger)
@@ -38,7 +38,7 @@ func TestSubscribeInitialize_TopicAlreadyExists(t *testing.T) {
 	}
 
 	config := DefaultSubscriberConfig()
-	config.Brokers = []string{"localhost:9092"}
+	config.Brokers = []string{"127.0.0.1:9092"}
 
 	logger := watermill.NewStdLogger(false, false)
 	subscriber, err := NewSubscriber(config, logger)
@@ -58,7 +58,7 @@ func TestSubscribeInitialize_TopicAlreadyExists(t *testing.T) {
 
 func TestSubscribeInitialize_ClosedSubscriber(t *testing.T) {
 	config := DefaultSubscriberConfig()
-	config.Brokers = []string{"localhost:9092"}
+	config.Brokers = []string{"127.0.0.1:9092"}
 
 	logger := watermill.NewStdLogger(false, false)
 	subscriber, err := NewSubscriber(config, logger)

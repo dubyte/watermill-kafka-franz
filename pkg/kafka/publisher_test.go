@@ -15,7 +15,7 @@ import (
 
 func TestNewPublisher_ValidConfig(t *testing.T) {
 	config := DefaultPublisherConfig()
-	config.Brokers = []string{"localhost:9092"}
+	config.Brokers = []string{"127.0.0.1:9092"}
 
 	logger := watermill.NewStdLogger(false, false)
 	publisher, err := NewPublisher(config, logger)
@@ -33,7 +33,7 @@ func TestNewPublisher_ValidConfig(t *testing.T) {
 
 func TestNewPublisher_NilLogger(t *testing.T) {
 	config := DefaultPublisherConfig()
-	config.Brokers = []string{"localhost:9092"}
+	config.Brokers = []string{"127.0.0.1:9092"}
 
 	publisher, err := NewPublisher(config, nil)
 
@@ -70,12 +70,21 @@ func TestPublisher_Publish_SingleMessage(t *testing.T) {
 	}
 
 	config := DefaultPublisherConfig()
-	config.Brokers = []string{"localhost:9092"}
+	config.Brokers = []string{"127.0.0.1:9092"}
 
 	logger := watermill.NewStdLogger(false, false)
 	publisher, err := NewPublisher(config, logger)
 	require.NoError(t, err)
 	defer publisher.Close()
+
+	topic := "test-topic-" + watermill.NewUUID()
+
+	// Initialize topic to avoid race conditions with auto-creation
+	sub, err := NewSubscriber(SubscriberConfig{Brokers: config.Brokers}, logger)
+	require.NoError(t, err)
+	err = sub.SubscribeInitialize(topic)
+	require.NoError(t, err)
+	_ = sub.Close()
 
 	msg := message.NewMessage(watermill.NewUUID(), []byte("test payload"))
 	msg.Metadata.Set("key1", "value1")
@@ -84,7 +93,6 @@ func TestPublisher_Publish_SingleMessage(t *testing.T) {
 	defer cancel()
 	msg.SetContext(ctx)
 
-	topic := "test-topic-" + watermill.NewUUID()
 	err = publisher.Publish(topic, msg)
 	require.NoError(t, err)
 }
@@ -95,12 +103,21 @@ func TestPublisher_Publish_MultipleMessages(t *testing.T) {
 	}
 
 	config := DefaultPublisherConfig()
-	config.Brokers = []string{"localhost:9092"}
+	config.Brokers = []string{"127.0.0.1:9092"}
 
 	logger := watermill.NewStdLogger(false, false)
 	publisher, err := NewPublisher(config, logger)
 	require.NoError(t, err)
 	defer publisher.Close()
+
+	topic := "test-topic-" + watermill.NewUUID()
+
+	// Initialize topic to avoid race conditions with auto-creation
+	sub, err := NewSubscriber(SubscriberConfig{Brokers: config.Brokers}, logger)
+	require.NoError(t, err)
+	err = sub.SubscribeInitialize(topic)
+	require.NoError(t, err)
+	_ = sub.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -122,7 +139,7 @@ func TestPublisher_Publish_MultipleMessages(t *testing.T) {
 
 func TestPublisher_Publish_EmptyMessages(t *testing.T) {
 	config := DefaultPublisherConfig()
-	config.Brokers = []string{"localhost:9092"}
+	config.Brokers = []string{"127.0.0.1:9092"}
 
 	logger := watermill.NewStdLogger(false, false)
 	publisher, err := NewPublisher(config, logger)
@@ -139,7 +156,7 @@ func TestPublisher_Publish_EmptyMessages(t *testing.T) {
 
 func TestPublisher_Publish_ClosedPublisher(t *testing.T) {
 	config := DefaultPublisherConfig()
-	config.Brokers = []string{"localhost:9092"}
+	config.Brokers = []string{"127.0.0.1:9092"}
 
 	logger := watermill.NewStdLogger(false, false)
 	publisher, err := NewPublisher(config, logger)
@@ -160,7 +177,7 @@ func TestPublisher_Publish_ClosedPublisher(t *testing.T) {
 
 func TestPublisher_Close_Idempotent(t *testing.T) {
 	config := DefaultPublisherConfig()
-	config.Brokers = []string{"localhost:9092"}
+	config.Brokers = []string{"127.0.0.1:9092"}
 
 	logger := watermill.NewStdLogger(false, false)
 	publisher, err := NewPublisher(config, logger)
@@ -178,7 +195,7 @@ func TestPublisher_Close_Idempotent(t *testing.T) {
 
 func TestPublisher_Publish_WithCustomMarshaler(t *testing.T) {
 	config := DefaultPublisherConfig()
-	config.Brokers = []string{"localhost:9092"}
+	config.Brokers = []string{"127.0.0.1:9092"}
 	config.Marshaler = DefaultMarshaler{}
 
 	logger := watermill.NewStdLogger(false, false)
@@ -191,7 +208,7 @@ func TestPublisher_Publish_WithCustomMarshaler(t *testing.T) {
 
 func TestPublisher_Publish_MarshalError(t *testing.T) {
 	config := DefaultPublisherConfig()
-	config.Brokers = []string{"localhost:9092"}
+	config.Brokers = []string{"127.0.0.1:9092"}
 	config.Marshaler = &failingMarshaler{}
 
 	logger := watermill.NewStdLogger(false, false)

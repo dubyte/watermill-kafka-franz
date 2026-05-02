@@ -9,7 +9,7 @@ import (
 )
 
 func kafkaBrokers() []string {
-	return []string{"localhost:9092"}
+	return []string{"127.0.0.1:9092"}
 }
 
 func createPubSub(t *testing.T) (message.Publisher, message.Subscriber) {
