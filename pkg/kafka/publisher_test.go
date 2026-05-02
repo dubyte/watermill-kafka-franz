@@ -54,14 +54,9 @@ func TestNewPublisher_InvalidBrokers(t *testing.T) {
 	logger := watermill.NewStdLogger(false, false)
 	publisher, err := NewPublisher(config, logger)
 
-	// franz-go allows empty brokers initially but will fail when used
-	// The publisher is created but connection will fail later
-	if err != nil {
-		assert.Nil(t, publisher)
-	} else {
-		// Clean up if it was created
-		_ = publisher.Close()
-	}
+	assert.Error(t, err)
+	assert.Nil(t, publisher)
+	assert.Contains(t, err.Error(), "brokers must not be empty")
 }
 
 func TestPublisher_Publish_SingleMessage(t *testing.T) {

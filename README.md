@@ -135,6 +135,15 @@ timestamp, ok := kafka.MessageTimestampFromContext(msg.Context())
 key, ok := kafka.MessageKeyFromContext(msg.Context())
 ```
 
+You can also set context values when building custom middleware or marshalers:
+
+```go
+ctx = kafka.ContextWithPartition(ctx, partition)
+ctx = kafka.ContextWithOffset(ctx, offset)
+ctx = kafka.ContextWithTimestamp(ctx, timestamp)
+ctx = kafka.ContextWithKey(ctx, key)
+```
+
 ### Authentication
 
 #### SASL/PLAIN

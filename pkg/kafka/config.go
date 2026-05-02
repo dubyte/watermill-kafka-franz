@@ -2,6 +2,7 @@ package kafka
 
 import (
 	"crypto/tls"
+	"errors"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -107,8 +108,12 @@ type SubscriberConfig struct {
 	FetchMaxWait time.Duration
 
 	// NackResendSleep sets how long to sleep before resending a nacked message.
-	// Defaults to 100ms. Set to 0 for no sleep.
+	// Defaults to 0 (no sleep). Use DefaultSubscriberConfig() for a pre-filled 100ms default.
 	NackResendSleep time.Duration
+
+	// CommitTimeout is the timeout for manual offset commits when DisableAutoCommit is true.
+	// Defaults to 10 seconds. Increase for high-latency clusters.
+	CommitTimeout time.Duration
 
 	// TLS configuration for secure connections.
 	TLS *tls.Config
@@ -126,6 +131,58 @@ type SubscriberConfig struct {
 	// OverwriteKgoOpts allows passing arbitrary franz-go options.
 	// Use with caution - these options may override settings above.
 	OverwriteKgoOpts []kgo.Opt
+
+	// InitializeTopicPartitions is the number of partitions for topics created by SubscribeInitialize.
+	// Defaults to 1.
+	InitializeTopicPartitions int32
+
+	// InitializeTopicReplicationFactor is the replication factor for topics created by SubscribeInitialize.
+	// Defaults to 1.
+	InitializeTopicReplicationFactor int16
+}
+
+// Validate checks that the PublisherConfig has all required fields set.
+func (c PublisherConfig) Validate() error {
+	if len(c.Brokers) == 0 {
+		return errors.New("brokers must not be empty")
+	}
+	if c.Marshaler == nil {
+		return errors.New("marshaler must not be nil")
+	}
+	return nil
+}
+
+// Validate checks that the SubscriberConfig has all required fields set.
+func (c SubscriberConfig) Validate() error {
+	if len(c.Brokers) == 0 {
+		return errors.New("brokers must not be empty")
+	}
+	if c.Unmarshaler == nil {
+		return errors.New("unmarshaler must not be nil")
+	}
+	return nil
+}
+
+// setPublisherDefaults applies default values to zero-value fields in PublisherConfig.
+func setPublisherDefaults(config *PublisherConfig) {
+	if config.Marshaler == nil {
+		config.Marshaler = DefaultMarshaler{}
+	}
+	if config.MaxBufferedRecords == 0 {
+		config.MaxBufferedRecords = 10000
+	}
+	if config.ProduceRequestTimeout == 0 {
+		config.ProduceRequestTimeout = 10 * time.Second
+	}
+	if config.BatchMaxBytes == 0 {
+		config.BatchMaxBytes = 1 << 20 // 1MB
+	}
+	if len(config.Compression) == 0 {
+		config.Compression = []kgo.CompressionCodec{kgo.SnappyCompression(), kgo.NoCompression()}
+	}
+	if config.ClientID == "" {
+		config.ClientID = "watermill"
+	}
 }
 
 // DefaultPublisherConfig returns a PublisherConfig with sensible defaults.
@@ -142,21 +199,19 @@ func DefaultPublisherConfig() PublisherConfig {
 // DefaultSubscriberConfig returns a SubscriberConfig with sensible defaults.
 func DefaultSubscriberConfig() SubscriberConfig {
 	return SubscriberConfig{
-		AutoOffsetReset:        "latest",
-		HeartbeatInterval:      3 * time.Second,
-		SessionTimeout:         45 * time.Second,
-		RebalanceTimeout:       60 * time.Second,
-		AutoCommitInterval:     5 * time.Second,
-		FetchMinBytes:          1,
-		FetchMaxBytes:          50 << 20, // 50MB
-		FetchMaxPartitionBytes: 1 << 20,  // 1MB
-		FetchMaxWait:           5 * time.Second,
-		NackResendSleep:        100 * time.Millisecond,
-		ClientID:               "watermill",
+		AutoOffsetReset:                  "latest",
+		HeartbeatInterval:                3 * time.Second,
+		SessionTimeout:                   45 * time.Second,
+		RebalanceTimeout:                 60 * time.Second,
+		AutoCommitInterval:               5 * time.Second,
+		FetchMinBytes:                    1,
+		FetchMaxBytes:                    50 << 20, // 50MB
+		FetchMaxPartitionBytes:           1 << 20,  // 1MB
+		FetchMaxWait:                     5 * time.Second,
+		NackResendSleep:                  100 * time.Millisecond,
+		ClientID:                         "watermill",
+		InitializeTopicPartitions:        1,
+		InitializeTopicReplicationFactor: 1,
+		CommitTimeout:                    10 * time.Second,
 	}
-}
-
-// GenerateClientID generates a unique client ID.
-func GenerateClientID() string {
-	return "watermill-kafka-franz"
 }

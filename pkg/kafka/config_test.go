@@ -79,6 +79,68 @@ func TestDefaultSubscriberConfig(t *testing.T) {
 	}
 }
 
+func TestPublisherConfig_Validate(t *testing.T) {
+	t.Run("valid config", func(t *testing.T) {
+		config := DefaultPublisherConfig()
+		config.Brokers = []string{"localhost:9092"}
+		config.Marshaler = DefaultMarshaler{}
+		if err := config.Validate(); err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("empty brokers", func(t *testing.T) {
+		config := DefaultPublisherConfig()
+		config.Marshaler = DefaultMarshaler{}
+		err := config.Validate()
+		if err == nil {
+			t.Error("expected error for empty brokers")
+		}
+	})
+
+	t.Run("nil marshaler", func(t *testing.T) {
+		config := PublisherConfig{
+			Brokers:   []string{"localhost:9092"},
+			Marshaler: nil,
+		}
+		err := config.Validate()
+		if err == nil {
+			t.Error("expected error for nil marshaler")
+		}
+	})
+}
+
+func TestSubscriberConfig_Validate(t *testing.T) {
+	t.Run("valid config", func(t *testing.T) {
+		config := DefaultSubscriberConfig()
+		config.Brokers = []string{"localhost:9092"}
+		config.Unmarshaler = DefaultMarshaler{}
+		if err := config.Validate(); err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("empty brokers", func(t *testing.T) {
+		config := DefaultSubscriberConfig()
+		config.Unmarshaler = DefaultMarshaler{}
+		err := config.Validate()
+		if err == nil {
+			t.Error("expected error for empty brokers")
+		}
+	})
+
+	t.Run("nil unmarshaler", func(t *testing.T) {
+		config := SubscriberConfig{
+			Brokers:     []string{"localhost:9092"},
+			Unmarshaler: nil,
+		}
+		err := config.Validate()
+		if err == nil {
+			t.Error("expected error for nil unmarshaler")
+		}
+	})
+}
+
 func TestConfigWithOverwriteKgoOpts(t *testing.T) {
 	// Test PublisherConfig with custom kgo options
 	pubConfig := DefaultPublisherConfig()

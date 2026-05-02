@@ -2,11 +2,12 @@ package kafka
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/message"
-	"github.com/pkg/errors"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -22,8 +23,10 @@ type Publisher struct {
 
 // NewPublisher creates a new Kafka Publisher.
 func NewPublisher(config PublisherConfig, logger watermill.LoggerAdapter) (*Publisher, error) {
-	if config.Marshaler == nil {
-		config.Marshaler = DefaultMarshaler{}
+	setPublisherDefaults(&config)
+
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid publisher config: %w", err)
 	}
 
 	if logger == nil {
@@ -57,7 +60,7 @@ func NewPublisher(config PublisherConfig, logger watermill.LoggerAdapter) (*Publ
 
 	client, err := kgo.NewClient(opts...)
 	if err != nil {
-		return nil, errors.Wrap(err, "cannot create kafka client")
+		return nil, fmt.Errorf("cannot create kafka client: %w", err)
 	}
 
 	return &Publisher{
@@ -84,24 +87,19 @@ func (p *Publisher) Publish(topic string, msgs ...*message.Message) error {
 	for i, msg := range msgs {
 		record, err := p.config.Marshaler.Marshal(topic, msg)
 		if err != nil {
-			return errors.Wrapf(err, "cannot marshal message %s", msg.UUID)
+			return fmt.Errorf("cannot marshal message %s: %w", msg.UUID, err)
 		}
 
-		// Set context for cancellation/timeout
-		// Note: We don't use msg.Context() here because it may be cancelled
-		// The record context is used for request-scoped values, not for cancellation
 		record.Context = context.Background()
 		records[i] = record
 	}
 
-	// Use background context for publishing
-	// Message contexts may be cancelled and shouldn't affect publishing
-	ctx := context.Background()
+	ctx, ctxCancel := context.WithTimeout(context.Background(), p.config.ProduceRequestTimeout)
+	defer ctxCancel()
 
-	// Synchronous production
 	result := p.client.ProduceSync(ctx, records...)
 	if err := result.FirstErr(); err != nil {
-		return errors.Wrap(err, "cannot produce messages")
+		return fmt.Errorf("cannot produce messages: %w", err)
 	}
 
 	// Log success with partition/offset info from first record

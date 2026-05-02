@@ -2,13 +2,14 @@ package kafka
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/message"
-	"github.com/pkg/errors"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -34,6 +35,10 @@ type Subscriber struct {
 func NewSubscriber(config SubscriberConfig, logger watermill.LoggerAdapter) (*Subscriber, error) {
 	config = setSubscriberDefaults(config)
 
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid subscriber config: %w", err)
+	}
+
 	if logger == nil {
 		logger = watermill.NopLogger{}
 	}
@@ -53,7 +58,7 @@ func NewSubscriber(config SubscriberConfig, logger watermill.LoggerAdapter) (*Su
 
 	adminClient, err := kgo.NewClient(adminOpts...)
 	if err != nil {
-		return nil, errors.Wrap(err, "cannot create admin kafka client")
+		return nil, fmt.Errorf("cannot create admin kafka client: %w", err)
 	}
 
 	return &Subscriber{
@@ -92,10 +97,30 @@ func setSubscriberDefaults(config SubscriberConfig) SubscriberConfig {
 	if config.FetchMaxWait == 0 {
 		config.FetchMaxWait = 5 * time.Second
 	}
+	if config.FetchMinBytes == 0 {
+		config.FetchMinBytes = 1
+	}
+
+	if config.ClientID == "" {
+		config.ClientID = "watermill"
+	}
+	if config.InitializeTopicPartitions == 0 {
+		config.InitializeTopicPartitions = 1
+	}
+	if config.InitializeTopicReplicationFactor == 0 {
+		config.InitializeTopicReplicationFactor = 1
+	}
+	if config.CommitTimeout == 0 {
+		config.CommitTimeout = 10 * time.Second
+	}
 	return config
 }
 
 // Subscribe implements message.Subscriber.
+//
+// Delivery guarantee: at-least-once. During consumer group rebalancing, a message
+// that was delivered but not yet Acked may be redelivered to this or another consumer.
+// Handlers must be idempotent.
 func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *message.Message, error) {
 	if atomic.LoadUint32(&s.closed) == 1 {
 		return nil, errors.New("subscriber closed")
@@ -106,9 +131,19 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 	// in concurrent polling scenarios.
 	opts := s.subscriberOptions(topic)
 
+	partitionsReady := make(chan struct{}, 1)
+	if s.config.ConsumerGroup != "" {
+		opts = append(opts, kgo.OnPartitionsAssigned(func(_ context.Context, _ *kgo.Client, _ map[string][]int32) {
+			select {
+			case partitionsReady <- struct{}{}:
+			default:
+			}
+		}))
+	}
+
 	client, err := kgo.NewClient(opts...)
 	if err != nil {
-		return nil, errors.Wrap(err, "cannot create kafka client")
+		return nil, fmt.Errorf("cannot create kafka client: %w", err)
 	}
 
 	s.subClientsMu.Lock()
@@ -121,6 +156,9 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 	go func() {
 		defer s.subscribersWg.Done()
 		defer close(output)
+		// Close the client when the goroutine exits so it leaves the consumer group
+		// immediately (e.g. on context cancellation). kgo.Client.Close is idempotent,
+		// so the additional close in Subscriber.Close is safe.
 		defer client.Close()
 
 		// Create a context that is cancelled when the subscriber is closing
@@ -135,12 +173,16 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 			}
 		}()
 
-		// Wait for consumer group to join and get partition assignments
-		// This is critical for tests to ensure consumer is ready before messages are published
-		time.Sleep(2 * time.Second)
+		if s.config.ConsumerGroup != "" {
+			select {
+			case <-partitionsReady:
+			case <-runCtx.Done():
+				return
+			}
+		}
 
 		for {
-			// Poll for records
+			client.AllowRebalance()
 			fetches := client.PollFetches(runCtx)
 
 			// Check if we should exit
@@ -161,22 +203,19 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 				return
 			}
 
-			// Handle errors - log them but continue polling to allow recovery
-			if errs := fetches.Errors(); len(errs) > 0 {
-				for _, err := range errs {
-					// Skip context canceled errors (normal shutdown)
-					if err.Err == context.Canceled {
-						continue
-					}
-					// Log all errors but don't exit - franz-go handles retries internally
-					s.logger.Debug("Fetch error", watermill.LogFields{
-						"error":     err.Err.Error(),
-						"topic":     err.Topic,
-						"partition": err.Partition,
-					})
+			// Handle errors - log them but still process any valid records in this fetch.
+			// A single fetch can contain both errors and valid records.
+			for _, err := range fetches.Errors() {
+				// Skip context canceled errors (normal shutdown)
+				if err.Err == context.Canceled {
+					continue
 				}
-				// Continue polling - franz-go handles reconnection
-				continue
+				// Log all errors but don't exit - franz-go handles retries internally
+				s.logger.Debug("Fetch error", watermill.LogFields{
+					"error":     err.Err.Error(),
+					"topic":     err.Topic,
+					"partition": err.Partition,
+				})
 			}
 
 			// Process records
@@ -184,12 +223,6 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 			for !iter.Done() {
 				record := iter.Next()
 				if record == nil {
-					continue
-				}
-
-				// Topic filtering is not strictly necessary here because each client is topic-isolated,
-				// but it's good practice.
-				if record.Topic != topic {
 					continue
 				}
 
@@ -201,10 +234,10 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 
 				// Enrich context with Kafka metadata
 				// Use context.WithoutCancel to preserve values but avoid carrying over cancellation
-				recordCtx := setPartitionToCtx(context.WithoutCancel(runCtx), record.Partition)
-				recordCtx = setPartitionOffsetToCtx(recordCtx, record.Offset)
-				recordCtx = setMessageTimestampToCtx(recordCtx, record.Timestamp)
-				recordCtx = setMessageKeyToCtx(recordCtx, record.Key)
+				recordCtx := ContextWithPartition(context.WithoutCancel(runCtx), record.Partition)
+				recordCtx = ContextWithOffset(recordCtx, record.Offset)
+				recordCtx = ContextWithTimestamp(recordCtx, record.Timestamp)
+				recordCtx = ContextWithKey(recordCtx, record.Key)
 
 				msgCtx, cancelMsg := context.WithCancel(recordCtx)
 				msg.SetContext(msgCtx)
@@ -236,6 +269,8 @@ func (s *Subscriber) subscriberOptions(topic string) []kgo.Opt {
 	if s.config.ConsumerGroup != "" {
 		opts = append(opts,
 			kgo.ConsumerGroup(s.config.ConsumerGroup),
+			// BlockRebalanceOnPoll is NOT enabled: handleMessage blocks per-record
+			// waiting for Ack/Nack, which would prevent rebalances and deadlock.
 			kgo.HeartbeatInterval(s.config.HeartbeatInterval),
 			kgo.SessionTimeout(s.config.SessionTimeout),
 			kgo.RebalanceTimeout(s.config.RebalanceTimeout),
@@ -301,19 +336,20 @@ ResendLoop:
 
 			// Manual commit if auto-commit disabled
 			if s.config.DisableAutoCommit {
-				if err := client.CommitRecords(msg.Context(), record); err != nil {
+				commitCtx, commitCancel := context.WithTimeout(context.Background(), s.config.CommitTimeout)
+				if err := client.CommitRecords(commitCtx, record); err != nil {
 					s.logger.Error("Cannot commit offset", err, nil)
 				}
+				commitCancel()
 			}
 			break ResendLoop
 
 		case <-msg.Nacked():
-			// Copy and retry
 			msg = msg.Copy()
-			msg.SetContext(setPartitionToCtx(
-				setPartitionOffsetToCtx(
-					setMessageTimestampToCtx(
-						setMessageKeyToCtx(ctx, record.Key),
+			msg.SetContext(ContextWithPartition(
+				ContextWithOffset(
+					ContextWithTimestamp(
+						ContextWithKey(context.WithoutCancel(ctx), record.Key),
 						record.Timestamp,
 					),
 					record.Offset,
@@ -374,7 +410,7 @@ func (s *Subscriber) SubscribeInitialize(topic string) error {
 	// Check if topic exists
 	topics, err := adminClient.ListTopics(ctx)
 	if err != nil {
-		return errors.Wrap(err, "cannot list topics")
+		return fmt.Errorf("cannot list topics: %w", err)
 	}
 
 	if _, exists := topics[topic]; exists {
@@ -383,9 +419,9 @@ func (s *Subscriber) SubscribeInitialize(topic string) error {
 	}
 
 	// Create topic with default config (1 partition, replication factor 1)
-	resp, err := adminClient.CreateTopics(ctx, 1, 1, nil, topic)
+	resp, err := adminClient.CreateTopics(ctx, s.config.InitializeTopicPartitions, s.config.InitializeTopicReplicationFactor, nil, topic)
 	if err != nil {
-		return errors.Wrap(err, "cannot create topic")
+		return fmt.Errorf("cannot create topic: %w", err)
 	}
 
 	if err := resp[topic].Err; err != nil {
@@ -394,7 +430,7 @@ func (s *Subscriber) SubscribeInitialize(topic string) error {
 			s.logger.Debug("Topic already exists", watermill.LogFields{"topic": topic})
 			return nil
 		}
-		return errors.Wrapf(err, "cannot create topic %s", topic)
+		return fmt.Errorf("cannot create topic %s: %w", topic, err)
 	}
 
 	s.logger.Info("Created Kafka topic", watermill.LogFields{"topic": topic})
