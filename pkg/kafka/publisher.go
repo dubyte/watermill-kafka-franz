@@ -23,9 +23,7 @@ type Publisher struct {
 
 // NewPublisher creates a new Kafka Publisher.
 func NewPublisher(config PublisherConfig, logger watermill.LoggerAdapter) (*Publisher, error) {
-	if config.Marshaler == nil {
-		config.Marshaler = DefaultMarshaler{}
-	}
+	setPublisherDefaults(&config)
 
 	if logger == nil {
 		logger = watermill.NopLogger{}

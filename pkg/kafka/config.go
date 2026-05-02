@@ -128,6 +128,28 @@ type SubscriberConfig struct {
 	OverwriteKgoOpts []kgo.Opt
 }
 
+// setPublisherDefaults applies default values to zero-value fields in PublisherConfig.
+func setPublisherDefaults(config *PublisherConfig) {
+	if config.Marshaler == nil {
+		config.Marshaler = DefaultMarshaler{}
+	}
+	if config.MaxBufferedRecords == 0 {
+		config.MaxBufferedRecords = 10000
+	}
+	if config.ProduceRequestTimeout == 0 {
+		config.ProduceRequestTimeout = 10 * time.Second
+	}
+	if config.BatchMaxBytes == 0 {
+		config.BatchMaxBytes = 1 << 20 // 1MB
+	}
+	if len(config.Compression) == 0 {
+		config.Compression = []kgo.CompressionCodec{kgo.SnappyCompression(), kgo.NoCompression()}
+	}
+	if config.ClientID == "" {
+		config.ClientID = "watermill"
+	}
+}
+
 // DefaultPublisherConfig returns a PublisherConfig with sensible defaults.
 func DefaultPublisherConfig() PublisherConfig {
 	return PublisherConfig{
