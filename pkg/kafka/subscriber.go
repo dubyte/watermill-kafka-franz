@@ -151,6 +151,10 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 	go func() {
 		defer s.subscribersWg.Done()
 		defer close(output)
+		// Close the client when the goroutine exits so it leaves the consumer group
+		// immediately (e.g. on context cancellation). kgo.Client.Close is idempotent,
+		// so the additional close in Subscriber.Close is safe.
+		defer client.Close()
 
 		// Create a context that is cancelled when the subscriber is closing
 		runCtx, cancel := context.WithCancel(ctx)
