@@ -155,8 +155,3 @@ func DefaultSubscriberConfig() SubscriberConfig {
 		ClientID:               "watermill",
 	}
 }
-
-// GenerateClientID generates a unique client ID.
-func GenerateClientID() string {
-	return "watermill-kafka-franz"
-}
