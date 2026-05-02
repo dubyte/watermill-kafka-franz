@@ -16,9 +16,9 @@ import (
 
 // Subscriber implements message.Subscriber interface using franz-go.
 type Subscriber struct {
-	config   SubscriberConfig
-	client   *kgo.Client
-	logger   watermill.LoggerAdapter
+	config SubscriberConfig
+	client *kgo.Client
+	logger watermill.LoggerAdapter
 
 	closing       chan struct{}
 	subscribersWg sync.WaitGroup
@@ -33,16 +33,16 @@ func NewSubscriber(config SubscriberConfig, logger watermill.LoggerAdapter) (*Su
 		logger = watermill.NopLogger{}
 	}
 
-opts := []kgo.Opt{
-kgo.SeedBrokers(config.Brokers...),
-kgo.FetchMinBytes(config.FetchMinBytes),
-kgo.FetchMaxBytes(config.FetchMaxBytes),
-kgo.FetchMaxPartitionBytes(config.FetchMaxPartitionBytes),
-kgo.FetchMaxWait(config.FetchMaxWait),
-kgo.ClientID(config.ClientID),
+	opts := []kgo.Opt{
+		kgo.SeedBrokers(config.Brokers...),
+		kgo.FetchMinBytes(config.FetchMinBytes),
+		kgo.FetchMaxBytes(config.FetchMaxBytes),
+		kgo.FetchMaxPartitionBytes(config.FetchMaxPartitionBytes),
+		kgo.FetchMaxWait(config.FetchMaxWait),
+		kgo.ClientID(config.ClientID),
 		kgo.Rack(config.RackID),
 		kgo.AllowAutoTopicCreation(),
-}
+	}
 
 	// Consumer group configuration
 	if config.ConsumerGroup != "" {
@@ -87,8 +87,6 @@ kgo.ClientID(config.ClientID),
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot create kafka client")
 	}
-
-
 
 	return &Subscriber{
 		config:  config,
@@ -154,11 +152,11 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 			}
 		}()
 
-// Add topic to consumption
+		// Add topic to consumption
 		s.client.AddConsumeTopics(topic)
-		
+
 		// Give the client time to set up consumption
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 
 		for {
 			// Poll for records
