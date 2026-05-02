@@ -195,10 +195,10 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 
 				// Enrich context with Kafka metadata
 				// Use context.WithoutCancel to preserve values but avoid carrying over cancellation
-				recordCtx := setPartitionToCtx(context.WithoutCancel(runCtx), record.Partition)
-				recordCtx = setPartitionOffsetToCtx(recordCtx, record.Offset)
-				recordCtx = setMessageTimestampToCtx(recordCtx, record.Timestamp)
-				recordCtx = setMessageKeyToCtx(recordCtx, record.Key)
+				recordCtx := ContextWithPartition(context.WithoutCancel(runCtx), record.Partition)
+				recordCtx = ContextWithOffset(recordCtx, record.Offset)
+				recordCtx = ContextWithTimestamp(recordCtx, record.Timestamp)
+				recordCtx = ContextWithKey(recordCtx, record.Key)
 
 				msgCtx, cancelMsg := context.WithCancel(recordCtx)
 				msg.SetContext(msgCtx)
@@ -304,10 +304,10 @@ ResendLoop:
 		case <-msg.Nacked():
 			// Copy and retry
 			msg = msg.Copy()
-			msg.SetContext(setPartitionToCtx(
-				setPartitionOffsetToCtx(
-					setMessageTimestampToCtx(
-						setMessageKeyToCtx(ctx, record.Key),
+			msg.SetContext(ContextWithPartition(
+				ContextWithOffset(
+					ContextWithTimestamp(
+						ContextWithKey(ctx, record.Key),
 						record.Timestamp,
 					),
 					record.Offset,
