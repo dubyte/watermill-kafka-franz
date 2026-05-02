@@ -1,39 +1,220 @@
-# Watermill franz Pub/Sub
-<img align="right" width="200" src="https://threedots.tech/watermill-io/watermill-logo.png">
+# Watermill Kafka Franz
 
-[![CI Status](https://github.com/dubyte/watermill-franz/actions/workflows/main.yml/badge.svg)](https://github.com/dubyte/watermill-franz/actions/workflows/main.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/dubyte/watermill-franz)](https://goreportcard.com/report/github.com/dubyte/watermill-franz)
+A [Watermill](https://watermill.io) Pub/Sub implementation for Apache Kafka using the modern [franz-go](https://github.com/twmb/franz-go) client library.
 
-This is Pub/Sub for the [Watermill](https://watermill.io/) project.
+## Features
 
+- Full Watermill Pub/Sub interface compliance
+- Consumer groups with automatic partition rebalancing
+- At-least-once delivery semantics
+- Context-based cancellation and graceful shutdown
+- Configurable marshaling strategies
+- SASL authentication and TLS support
+- Idiomatic Go with functional configuration
+- High performance (lock-free internals)
 
-See [DEVELOPMENT.md](./DEVELOPMENT.md) for more information about running and testing.
+## Installation
 
-Watermill is a Go library for working efficiently with message streams. It is intended
-for building event driven applications, enabling event sourcing, RPC over messages,
-sagas and basically whatever else comes to your mind. You can use conventional pub/sub
-implementations like Kafka or RabbitMQ, but also HTTP or MySQL binlog if that fits your use case.
+```bash
+go get github.com/dubyte/watermill-kafka-franz
+```
 
-All Pub/Sub implementations can be found at [https://watermill.io/pubsubs/](https://watermill.io/pubsubs/).
+## Quick Start
 
-Documentation: https://watermill.io/
+### Publisher
 
-Getting started guide: https://watermill.io/docs/getting-started/
+```go
+package main
 
-Issues: https://github.com/ThreeDotsLabs/watermill/issues
+import (
+    "context"
+    "log"
+    
+    "github.com/dubyte/watermill-kafka-franz/pkg/kafka"
+    "github.com/ThreeDotsLabs/watermill/message"
+)
+
+func main() {
+    publisher, err := kafka.NewPublisher(kafka.PublisherConfig{
+        Brokers: []string{"localhost:9092"},
+    }, nil)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer publisher.Close()
+    
+    msg := message.NewMessage("id-1", []byte("hello world"))
+    err = publisher.Publish("my-topic", msg)
+    if err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+### Subscriber
+
+```go
+subscriber, err := kafka.NewSubscriber(kafka.SubscriberConfig{
+    Brokers:       []string{"localhost:9092"},
+    ConsumerGroup: "my-consumer-group",
+}, nil)
+if err != nil {
+    log.Fatal(err)
+}
+defer subscriber.Close()
+
+messages, err := subscriber.Subscribe(context.Background(), "my-topic")
+if err != nil {
+    log.Fatal(err)
+}
+
+for msg := range messages {
+    log.Printf("Received: %s", msg.Payload)
+    msg.Ack()
+}
+```
+
+## Configuration
+
+### Publisher Options
+
+```go
+config := kafka.PublisherConfig{
+    Brokers:               []string{"localhost:9092"},
+    Marshaler:             kafka.DefaultMarshaler{},
+    MaxBufferedRecords:    10000,
+    ProduceRequestTimeout: 10 * time.Second,
+    BatchMaxBytes:         1 << 20, // 1MB
+    Compression:           []kgo.CompressionCodec{kgo.SnappyCompression()},
+    ClientID:              "my-app",
+}
+```
+
+### Subscriber Options
+
+```go
+config := kafka.SubscriberConfig{
+    Brokers:                []string{"localhost:9092"},
+    Unmarshaler:            kafka.DefaultMarshaler{},
+    ConsumerGroup:          "my-group",
+    AutoOffsetReset:        "earliest", // or "latest", "none"
+    HeartbeatInterval:      3 * time.Second,
+    SessionTimeout:         45 * time.Second,
+    AutoCommitInterval:     5 * time.Second,
+    DisableAutoCommit:      false,
+    NackResendSleep:        100 * time.Millisecond,
+    FetchMaxBytes:          50 << 20, // 50MB
+    ClientID:               "my-app",
+}
+```
+
+## Advanced Usage
+
+### Custom Marshaler
+
+```go
+type MyMarshaler struct{}
+
+func (m MyMarshaler) Marshal(topic string, msg *message.Message) (*kgo.Record, error) {
+    // Custom serialization logic
+}
+
+func (m MyMarshaler) Unmarshal(record *kgo.Record) (*message.Message, error) {
+    // Custom deserialization logic
+}
+```
+
+### Context Metadata
+
+Access Kafka metadata from message context:
+
+```go
+partition, ok := kafka.PartitionFromContext(msg.Context())
+offset, ok := kafka.OffsetFromContext(msg.Context())
+timestamp, ok := kafka.MessageTimestampFromContext(msg.Context())
+key, ok := kafka.MessageKeyFromContext(msg.Context())
+```
+
+### Authentication
+
+#### SASL/PLAIN
+
+```go
+config.SASLMechanism = plain.Auth{
+    User: "username",
+    Pass: "password",
+}.AsMechanism()
+```
+
+#### SASL/SCRAM
+
+```go
+config.SASLMechanism = scram.Auth{
+    User: "username",
+    Pass: "password",
+}.AsSha256Mechanism()
+```
+
+#### TLS
+
+```go
+config.TLS = &tls.Config{
+    // Your TLS configuration
+}
+```
+
+## Testing
+
+Start Kafka with Docker Compose:
+
+```bash
+docker-compose up -d
+```
+
+Run tests:
+
+```bash
+# Unit tests only
+go test -short ./...
+
+# All tests (requires Kafka)
+go test ./...
+
+# With race detector
+go test -race ./...
+```
+
+## Why Franz-Go?
+
+This library uses [franz-go](https://github.com/twmb/franz-go) instead of Sarama because:
+
+- **Modern Go**: Uses latest Go features, cleaner API
+- **Unified Client**: Single client for producing and consuming
+- **Performance**: Lock-free internals, better throughput
+- **Context Support**: Native context.Context support
+- **Error Handling**: Better error types with `kerr` package
+- **Active Development**: Well-maintained with frequent updates
+
+## Comparison with Watermill-Kafka
+
+| Feature | Watermill-Kafka (Sarama) | Watermill-Kafka-Franz |
+|---------|-------------------------|----------------------|
+| API Style | Struct-based config | Functional options + Struct |
+| Client | Separate producer/consumer | Unified client |
+| Context | Limited | Native support |
+| Compression | Limited | Multiple codecs |
+| Performance | Good | Excellent |
 
 ## Contributing
 
-All contributions are very much welcome. If you'd like to help with Watermill development,
-please see [open issues](https://github.com/ThreeDotsLabs/watermill/issues?utf8=%E2%9C%93&q=is%3Aissue+is%3Aopen+)
-and submit your pull request via GitHub.
+Contributions welcome! Please:
 
-## Support
-
-If you didn't find the answer to your question in [the documentation](https://watermill.io/), feel free to ask us directly!
-
-Please join us on the `#watermill` channel on the [Three Dots Labs Discord](https://discord.gg/QV6VFg4YQE).
+1. Fork the repository
+2. Create a feature branch
+3. Add tests for new functionality
+4. Ensure all tests pass
+5. Submit a pull request
 
 ## License
 
-[MIT License](./LICENSE)
+MIT License - see LICENSE file for details.

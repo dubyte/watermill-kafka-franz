@@ -1,0 +1,162 @@
+package kafka
+
+import (
+	"crypto/tls"
+	"time"
+
+	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/sasl"
+)
+
+// PublisherConfig configures the Kafka Publisher.
+type PublisherConfig struct {
+	// Brokers is the list of Kafka brokers to connect to.
+	Brokers []string
+
+	// Marshaler converts Watermill messages to Kafka records.
+	// Defaults to DefaultMarshaler{}.
+	Marshaler Marshaler
+
+	// MaxBufferedRecords sets the max amount of records the client will buffer.
+	// Defaults to 10000.
+	MaxBufferedRecords int
+
+	// ProduceRequestTimeout is the timeout for producing messages.
+	// Defaults to 10 seconds.
+	ProduceRequestTimeout time.Duration
+
+	// BatchMaxBytes is the max size of a record batch.
+	// Defaults to 1MB.
+	BatchMaxBytes int32
+
+	// Compression sets the compression codec for message batches.
+	// Defaults to [SnappyCompression, NoCompression].
+	Compression []kgo.CompressionCodec
+
+	// DisableIdempotentWrite disables idempotent writes.
+	// Idempotent writes are enabled by default for exactly-once semantics.
+	DisableIdempotentWrite bool
+
+	// TLS configuration for secure connections.
+	TLS *tls.Config
+
+	// SASLMechanism for authentication.
+	SASLMechanism sasl.Mechanism
+
+	// ClientID is the client ID to use for Kafka connections.
+	// Defaults to "watermill".
+	ClientID string
+
+	// RackID is the rack ID for rack-aware consumers.
+	RackID string
+
+	// OverwriteKgoOpts allows passing arbitrary franz-go options.
+	// Use with caution - these options may override settings above.
+	OverwriteKgoOpts []kgo.Opt
+}
+
+// SubscriberConfig configures the Kafka Subscriber.
+type SubscriberConfig struct {
+	// Brokers is the list of Kafka brokers to connect to.
+	Brokers []string
+
+	// Unmarshaler converts Kafka records to Watermill messages.
+	// Defaults to DefaultMarshaler{}.
+	Unmarshaler Unmarshaler
+
+	// ConsumerGroup is the consumer group ID. If empty, consumes from all partitions.
+	ConsumerGroup string
+
+	// AutoOffsetReset sets the offset reset policy: "earliest", "latest", or "none".
+	// Defaults to "latest".
+	AutoOffsetReset string
+
+	// HeartbeatInterval is the consumer group heartbeat interval.
+	// Defaults to 3 seconds.
+	HeartbeatInterval time.Duration
+
+	// SessionTimeout is the consumer group session timeout.
+	// Defaults to 45 seconds.
+	SessionTimeout time.Duration
+
+	// RebalanceTimeout is the consumer group rebalance timeout.
+	// Defaults to 60 seconds.
+	RebalanceTimeout time.Duration
+
+	// AutoCommitInterval sets how often to auto-commit offsets.
+	// Defaults to 5 seconds.
+	AutoCommitInterval time.Duration
+
+	// DisableAutoCommit disables auto-commit. When disabled, offsets are committed manually.
+	DisableAutoCommit bool
+
+	// FetchMinBytes sets the minimum bytes to fetch per request.
+	// Defaults to 1.
+	FetchMinBytes int32
+
+	// FetchMaxBytes sets the maximum bytes to fetch per request.
+	// Defaults to 50MB.
+	FetchMaxBytes int32
+
+	// FetchMaxPartitionBytes sets the max bytes per partition.
+	// Defaults to 1MB.
+	FetchMaxPartitionBytes int32
+
+	// FetchMaxWait sets the maximum time to wait for fetch.
+	// Defaults to 5 seconds.
+	FetchMaxWait time.Duration
+
+	// NackResendSleep sets how long to sleep before resending a nacked message.
+	// Defaults to 100ms. Set to 0 for no sleep.
+	NackResendSleep time.Duration
+
+	// TLS configuration for secure connections.
+	TLS *tls.Config
+
+	// SASLMechanism for authentication.
+	SASLMechanism sasl.Mechanism
+
+	// ClientID is the client ID to use for Kafka connections.
+	// Defaults to "watermill".
+	ClientID string
+
+	// RackID is the rack ID for rack-aware consumers.
+	RackID string
+
+	// OverwriteKgoOpts allows passing arbitrary franz-go options.
+	// Use with caution - these options may override settings above.
+	OverwriteKgoOpts []kgo.Opt
+}
+
+// DefaultPublisherConfig returns a PublisherConfig with sensible defaults.
+func DefaultPublisherConfig() PublisherConfig {
+	return PublisherConfig{
+		MaxBufferedRecords:    10000,
+		ProduceRequestTimeout: 10 * time.Second,
+		BatchMaxBytes:         1 << 20, // 1MB
+		Compression:           []kgo.CompressionCodec{kgo.SnappyCompression(), kgo.NoCompression()},
+		ClientID:              "watermill",
+	}
+}
+
+// DefaultSubscriberConfig returns a SubscriberConfig with sensible defaults.
+func DefaultSubscriberConfig() SubscriberConfig {
+	return SubscriberConfig{
+		AutoOffsetReset:        "latest",
+		HeartbeatInterval:      3 * time.Second,
+		SessionTimeout:         45 * time.Second,
+		RebalanceTimeout:       60 * time.Second,
+		AutoCommitInterval:     5 * time.Second,
+		FetchMinBytes:          1,
+		FetchMaxBytes:          50 << 20, // 50MB
+		FetchMaxPartitionBytes: 1 << 20,  // 1MB
+		FetchMaxWait:           5 * time.Second,
+		NackResendSleep:        100 * time.Millisecond,
+		ClientID:               "watermill",
+	}
+}
+
+// GenerateClientID generates a unique client ID.
+func GenerateClientID() string {
+	return "watermill-kafka-franz"
+}
