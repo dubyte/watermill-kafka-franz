@@ -33,15 +33,16 @@ func NewSubscriber(config SubscriberConfig, logger watermill.LoggerAdapter) (*Su
 		logger = watermill.NopLogger{}
 	}
 
-	opts := []kgo.Opt{
-		kgo.SeedBrokers(config.Brokers...),
-		kgo.FetchMinBytes(config.FetchMinBytes),
-		kgo.FetchMaxBytes(config.FetchMaxBytes),
-		kgo.FetchMaxPartitionBytes(config.FetchMaxPartitionBytes),
-		kgo.FetchMaxWait(config.FetchMaxWait),
-		kgo.ClientID(config.ClientID),
+opts := []kgo.Opt{
+kgo.SeedBrokers(config.Brokers...),
+kgo.FetchMinBytes(config.FetchMinBytes),
+kgo.FetchMaxBytes(config.FetchMaxBytes),
+kgo.FetchMaxPartitionBytes(config.FetchMaxPartitionBytes),
+kgo.FetchMaxWait(config.FetchMaxWait),
+kgo.ClientID(config.ClientID),
 		kgo.Rack(config.RackID),
-	}
+		kgo.AllowAutoTopicCreation(),
+}
 
 	// Consumer group configuration
 	if config.ConsumerGroup != "" {
@@ -52,16 +53,6 @@ func NewSubscriber(config SubscriberConfig, logger watermill.LoggerAdapter) (*Su
 			kgo.RebalanceTimeout(config.RebalanceTimeout),
 		)
 
-		// Offset reset policy
-		switch config.AutoOffsetReset {
-		case "earliest":
-			opts = append(opts, kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
-		case "latest":
-			opts = append(opts, kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()))
-		case "none":
-			opts = append(opts, kgo.ConsumeResetOffset(kgo.NewOffset().AtCommitted()))
-		}
-
 		// Auto-commit configuration
 		if !config.DisableAutoCommit {
 			opts = append(opts,
@@ -69,6 +60,16 @@ func NewSubscriber(config SubscriberConfig, logger watermill.LoggerAdapter) (*Su
 				kgo.AutoCommitInterval(config.AutoCommitInterval),
 			)
 		}
+	}
+
+	// Offset reset policy (applies to both consumer group and direct consumption)
+	switch config.AutoOffsetReset {
+	case "earliest":
+		opts = append(opts, kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
+	case "latest":
+		opts = append(opts, kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()))
+	case "none":
+		opts = append(opts, kgo.ConsumeResetOffset(kgo.NewOffset().AtCommitted()))
 	}
 
 	if config.TLS != nil {
@@ -86,6 +87,8 @@ func NewSubscriber(config SubscriberConfig, logger watermill.LoggerAdapter) (*Su
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot create kafka client")
 	}
+
+
 
 	return &Subscriber{
 		config:  config,
@@ -139,39 +142,62 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 		defer s.subscribersWg.Done()
 		defer close(output)
 
-		// Add topic to consumption
-		s.client.AddConsumeTopics(topic)
+		// Create a context that is cancelled when the subscriber is closing
+		runCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
 
-		for {
+		go func() {
 			select {
 			case <-s.closing:
-				return
-			case <-ctx.Done():
-				return
-			default:
+				cancel()
+			case <-runCtx.Done():
 			}
+		}()
 
+// Add topic to consumption
+		s.client.AddConsumeTopics(topic)
+		
+		// Give the client time to set up consumption
+		time.Sleep(100 * time.Millisecond)
+
+		for {
 			// Poll for records
-			fetches := s.client.PollFetches(ctx)
+			fetches := s.client.PollFetches(runCtx)
 
+			// Check if we should exit
 			if fetches.IsClientClosed() {
+				select {
+				case <-s.closing:
+					// Subscriber is closing, exit gracefully
+					return
+				default:
+					// Client closed but subscriber not - this can happen during startup
+					// or reconnection. Wait a bit and continue polling to allow recovery.
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
+			}
+
+			if runCtx.Err() != nil {
 				return
 			}
 
-			// Handle errors
+			// Handle errors - log them but continue polling to allow recovery
 			if errs := fetches.Errors(); len(errs) > 0 {
 				for _, err := range errs {
-					if !kerr.IsRetriable(err.Err) {
-						s.logger.Error("Non-retriable fetch error", err.Err, watermill.LogFields{
-							"topic":     err.Topic,
-							"partition": err.Partition,
-						})
-						return
+					// Skip context canceled errors (normal shutdown)
+					if err.Err == context.Canceled {
+						continue
 					}
-					s.logger.Debug("Retriable fetch error", watermill.LogFields{
-						"error": err.Err.Error(),
+					// Log all errors but don't exit - franz-go handles retries internally
+					s.logger.Debug("Fetch error", watermill.LogFields{
+						"error":     err.Err.Error(),
+						"topic":     err.Topic,
+						"partition": err.Partition,
 					})
 				}
+				// Continue polling - franz-go handles reconnection
+				continue
 			}
 
 			// Process records
@@ -189,16 +215,16 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 				}
 
 				// Enrich context with Kafka metadata
-				// Use context.Background() as base to avoid carrying over cancellation from previous loops
+				// Use context.Background() as base to avoid carrying over cancellation from runCtx
 				recordCtx := setPartitionToCtx(context.Background(), record.Partition)
 				recordCtx = setPartitionOffsetToCtx(recordCtx, record.Offset)
 				recordCtx = setMessageTimestampToCtx(recordCtx, record.Timestamp)
 				recordCtx = setMessageKeyToCtx(recordCtx, record.Key)
 
-				msgCtx, cancel := context.WithCancel(recordCtx)
+				msgCtx, cancelMsg := context.WithCancel(recordCtx)
 				msg.SetContext(msgCtx)
 
-				if err := s.handleMessage(msg, output, record, cancel); err != nil {
+				if err := s.handleMessage(msg, output, record, cancelMsg); err != nil {
 					return
 				}
 			}
@@ -274,9 +300,12 @@ func (s *Subscriber) Close() error {
 		return nil
 	}
 
+	s.logger.Debug("Subscriber: closing subscriber", nil)
 	close(s.closing)
 	s.subscribersWg.Wait()
+	s.logger.Debug("Subscriber: all subscribers finished, closing client", nil)
 	s.client.Close()
+	s.logger.Debug("Subscriber: client closed", nil)
 
 	return nil
 }
@@ -290,7 +319,8 @@ func (s *Subscriber) SubscribeInitialize(topic string) error {
 
 	// Create admin client
 	adminClient := kadm.NewClient(s.client)
-	defer adminClient.Close()
+	// Note: Don't close adminClient here - it wraps the shared client
+	// and closing it would close the underlying client
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

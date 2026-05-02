@@ -31,7 +31,7 @@ docker-up:
 # Wait for Kafka to be ready
 wait-for-kafka:
 	@echo "Waiting for Kafka to be ready..."
-	@timeout 60s bash -c 'until docker compose exec kafka kafka-broker-api-versions --bootstrap-server localhost:9092 > /dev/null 2>&1; do sleep 2; done'
+	@timeout 120s bash -c 'until docker compose exec kafka kafka-broker-api-versions --bootstrap-server localhost:9092 > /dev/null 2>&1; do sleep 5; done'
 	@echo "Kafka is ready!"
 
 # Stop Kafka

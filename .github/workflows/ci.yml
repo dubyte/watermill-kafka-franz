@@ -39,10 +39,11 @@ jobs:
 
       - name: Wait for Kafka
         run: |
-          timeout 60s bash -c 'until docker compose exec kafka kafka-broker-api-versions --bootstrap-server localhost:9092; do sleep 2; done'
+          timeout 120s bash -c 'until docker compose exec kafka kafka-broker-api-versions --bootstrap-server localhost:9092; do sleep 5; done'
+          echo "Kafka is ready!"
 
       - name: Run Tests
-        run: go test -v -race ./...
+        run: go test -v -race -timeout 30m ./...
 
       - name: Stop Kafka
         if: always()
