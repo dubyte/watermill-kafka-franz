@@ -111,6 +111,10 @@ type SubscriberConfig struct {
 	// Defaults to 0 (no sleep). Use DefaultSubscriberConfig() for a pre-filled 100ms default.
 	NackResendSleep time.Duration
 
+	// CommitTimeout is the timeout for manual offset commits when DisableAutoCommit is true.
+	// Defaults to 10 seconds. Increase for high-latency clusters.
+	CommitTimeout time.Duration
+
 	// TLS configuration for secure connections.
 	TLS *tls.Config
 
@@ -208,5 +212,6 @@ func DefaultSubscriberConfig() SubscriberConfig {
 		ClientID:                         "watermill",
 		InitializeTopicPartitions:        1,
 		InitializeTopicReplicationFactor: 1,
+		CommitTimeout:                    10 * time.Second,
 	}
 }

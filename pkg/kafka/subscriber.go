@@ -110,10 +110,17 @@ func setSubscriberDefaults(config SubscriberConfig) SubscriberConfig {
 	if config.InitializeTopicReplicationFactor == 0 {
 		config.InitializeTopicReplicationFactor = 1
 	}
+	if config.CommitTimeout == 0 {
+		config.CommitTimeout = 10 * time.Second
+	}
 	return config
 }
 
 // Subscribe implements message.Subscriber.
+//
+// Delivery guarantee: at-least-once. During consumer group rebalancing, a message
+// that was delivered but not yet Acked may be redelivered to this or another consumer.
+// Handlers must be idempotent.
 func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *message.Message, error) {
 	if atomic.LoadUint32(&s.closed) == 1 {
 		return nil, errors.New("subscriber closed")
@@ -329,7 +336,7 @@ ResendLoop:
 
 			// Manual commit if auto-commit disabled
 			if s.config.DisableAutoCommit {
-				commitCtx, commitCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				commitCtx, commitCancel := context.WithTimeout(context.Background(), s.config.CommitTimeout)
 				if err := client.CommitRecords(commitCtx, record); err != nil {
 					s.logger.Error("Cannot commit offset", err, nil)
 				}
