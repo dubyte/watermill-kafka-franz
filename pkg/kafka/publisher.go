@@ -9,6 +9,7 @@ import (
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/plugin/kotel"
 )
 
 // Publisher implements message.Publisher interface using franz-go.
@@ -53,6 +54,15 @@ func NewPublisher(config PublisherConfig, logger watermill.LoggerAdapter) (*Publ
 
 	if config.SASLMechanism != nil {
 		opts = append(opts, kgo.SASL(config.SASLMechanism))
+	}
+
+	// OTel hooks
+	if config.OTelEnabled {
+		kotelService := kotel.NewKotel(
+			kotel.WithTracer(kotel.NewTracer()),
+			kotel.WithMeter(kotel.NewMeter()),
+		)
+		opts = append(opts, kgo.WithHooks(kotelService.Hooks()...))
 	}
 
 	// Allow overriding with custom opts

@@ -13,6 +13,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/plugin/kotel"
 )
 
 // Subscriber implements message.Subscriber interface using franz-go.
@@ -301,6 +302,15 @@ func (s *Subscriber) subscriberOptions(topic string) []kgo.Opt {
 
 	if s.config.SASLMechanism != nil {
 		opts = append(opts, kgo.SASL(s.config.SASLMechanism))
+	}
+
+	// OTel hooks
+	if s.config.OTelEnabled {
+		kotelService := kotel.NewKotel(
+			kotel.WithTracer(kotel.NewTracer()),
+			kotel.WithMeter(kotel.NewMeter()),
+		)
+		opts = append(opts, kgo.WithHooks(kotelService.Hooks()...))
 	}
 
 	// Allow overriding with custom opts
