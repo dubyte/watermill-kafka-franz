@@ -379,12 +379,12 @@ ResendLoop:
 }
 
 // Stop signals the subscriber to stop consuming new messages while allowing
-// in-flight messages to be acked or nacked. After Stop, Subscribe will reject
-// new subscriptions. Existing subscription goroutines finish processing their
-// current batch and then exit.
+// in-flight messages to be acked or nacked. After Stop, Subscribe and
+// SubscribeInitialize will reject new calls. Existing subscription goroutines
+// finish processing their current batch and then exit.
 //
-// Stop is intended for graceful shutdown scenarios where a router (or caller)
-// wants to drain in-flight work before fully closing the subscriber with Close.
+// Stop is intended for graceful shutdown scenarios. Call Stop first to drain
+// in-flight messages, then call Close to complete the shutdown.
 //
 // It is safe to call Stop multiple times.
 func (s *Subscriber) Stop() error {
@@ -428,6 +428,10 @@ func (s *Subscriber) Close() error {
 func (s *Subscriber) SubscribeInitialize(topic string) error {
 	if atomic.LoadUint32(&s.closed) == 1 {
 		return errors.New("subscriber closed")
+	}
+
+	if atomic.LoadUint32(&s.stopped) == 1 {
+		return errors.New("subscriber stopped")
 	}
 
 	// Create admin client
