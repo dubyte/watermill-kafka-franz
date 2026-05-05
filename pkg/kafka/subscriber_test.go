@@ -73,3 +73,37 @@ func TestSubscribeInitialize_ClosedSubscriber(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "subscriber closed")
 }
+
+func TestNewSubscriber_OTelEnabled_SetsKotelService(t *testing.T) {
+	t.Parallel()
+
+	config := DefaultSubscriberConfig()
+	config.Brokers = []string{"127.0.0.1:9092"}
+	config.OTelEnabled = true
+
+	logger := watermill.NewStdLogger(false, false)
+	subscriber, err := NewSubscriber(config, logger)
+
+	require.NoError(t, err)
+	assert.NotNil(t, subscriber)
+	assert.NotNil(t, subscriber.kotelService, "kotelService must be set when OTelEnabled=true")
+
+	_ = subscriber.Close()
+}
+
+func TestNewSubscriber_OTelDisabled_KotelServiceNil(t *testing.T) {
+	t.Parallel()
+
+	config := DefaultSubscriberConfig()
+	config.Brokers = []string{"127.0.0.1:9092"}
+	config.OTelEnabled = false
+
+	logger := watermill.NewStdLogger(false, false)
+	subscriber, err := NewSubscriber(config, logger)
+
+	require.NoError(t, err)
+	assert.NotNil(t, subscriber)
+	assert.Nil(t, subscriber.kotelService, "kotelService must be nil when OTelEnabled=false")
+
+	_ = subscriber.Close()
+}

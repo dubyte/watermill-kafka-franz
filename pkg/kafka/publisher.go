@@ -100,11 +100,11 @@ func (p *Publisher) Publish(topic string, msgs ...*message.Message) error {
 			return fmt.Errorf("cannot marshal message %s: %w", msg.UUID, err)
 		}
 
-		record.Context = context.Background()
+		record.Context = msg.Context()
 		records[i] = record
 	}
 
-	ctx, ctxCancel := context.WithTimeout(context.Background(), p.config.ProduceRequestTimeout)
+	ctx, ctxCancel := context.WithTimeout(msgs[0].Context(), p.config.ProduceRequestTimeout)
 	defer ctxCancel()
 
 	result := p.client.ProduceSync(ctx, records...)
