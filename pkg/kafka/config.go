@@ -54,6 +54,10 @@ type PublisherConfig struct {
 	// OverwriteKgoOpts allows passing arbitrary franz-go options.
 	// Use with caution - these options may override settings above.
 	OverwriteKgoOpts []kgo.Opt
+
+	// OTelEnabled enables OpenTelemetry tracing and metrics via the kotel plugin.
+	// Requires a global OTel TracerProvider and MeterProvider to be configured.
+	OTelEnabled bool
 }
 
 // SubscriberConfig configures the Kafka Subscriber.
@@ -131,6 +135,10 @@ type SubscriberConfig struct {
 	// OverwriteKgoOpts allows passing arbitrary franz-go options.
 	// Use with caution - these options may override settings above.
 	OverwriteKgoOpts []kgo.Opt
+
+	// OTelEnabled enables OpenTelemetry tracing and metrics via the kotel plugin.
+	// Requires a global OTel TracerProvider and MeterProvider to be configured.
+	OTelEnabled bool
 
 	// InitializeTopicPartitions is the number of partitions for topics created by SubscribeInitialize.
 	// Defaults to 1.

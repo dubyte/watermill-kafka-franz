@@ -224,3 +224,19 @@ type failingMarshaler struct{}
 func (f *failingMarshaler) Marshal(topic string, msg *message.Message) (*kgo.Record, error) {
 	return nil, errors.New("marshal failed")
 }
+
+func TestNewPublisher_OTelEnabled_Succeeds(t *testing.T) {
+	t.Parallel()
+
+	config := DefaultPublisherConfig()
+	config.Brokers = []string{"127.0.0.1:9092"}
+	config.OTelEnabled = true
+
+	logger := watermill.NewStdLogger(false, false)
+	publisher, err := NewPublisher(config, logger)
+
+	require.NoError(t, err)
+	assert.NotNil(t, publisher)
+
+	_ = publisher.Close()
+}

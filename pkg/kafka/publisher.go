@@ -9,6 +9,8 @@ import (
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/plugin/kotel"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Publisher implements message.Publisher interface using franz-go.
@@ -55,6 +57,15 @@ func NewPublisher(config PublisherConfig, logger watermill.LoggerAdapter) (*Publ
 		opts = append(opts, kgo.SASL(config.SASLMechanism))
 	}
 
+	// OTel hooks
+	if config.OTelEnabled {
+		kotelService := kotel.NewKotel(
+			kotel.WithTracer(kotel.NewTracer()),
+			kotel.WithMeter(kotel.NewMeter()),
+		)
+		opts = append(opts, kgo.WithHooks(kotelService.Hooks()...))
+	}
+
 	// Allow overriding with custom opts
 	opts = append(opts, config.OverwriteKgoOpts...)
 
@@ -90,7 +101,11 @@ func (p *Publisher) Publish(topic string, msgs ...*message.Message) error {
 			return fmt.Errorf("cannot marshal message %s: %w", msg.UUID, err)
 		}
 
-		record.Context = context.Background()
+		// Attach the trace span from the message context to a fresh background
+		// context so kotel can propagate the parent trace. Using msg.Context()
+		// directly would fail the produce if that context is already cancelled
+		// (e.g. TestMessageCtx intentionally sets a cancelled context).
+		record.Context = trace.ContextWithSpan(context.Background(), trace.SpanFromContext(msg.Context()))
 		records[i] = record
 	}
 

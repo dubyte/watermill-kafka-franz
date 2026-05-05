@@ -13,6 +13,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/plugin/kotel"
 )
 
 // Subscriber implements message.Subscriber interface using franz-go.
@@ -22,6 +23,10 @@ type Subscriber struct {
 
 	// adminClient is used for SubscribeInitialize
 	adminClient *kgo.Client
+
+	// kotelService is built once when OTelEnabled=true and shared across Subscribe calls
+	// to avoid re-registering metric instruments on every subscription.
+	kotelService *kotel.Kotel
 
 	stopping      chan struct{}
 	stopped       uint32 // atomic
@@ -63,12 +68,21 @@ func NewSubscriber(config SubscriberConfig, logger watermill.LoggerAdapter) (*Su
 		return nil, fmt.Errorf("cannot create admin kafka client: %w", err)
 	}
 
+	var ks *kotel.Kotel
+	if config.OTelEnabled {
+		ks = kotel.NewKotel(
+			kotel.WithTracer(kotel.NewTracer()),
+			kotel.WithMeter(kotel.NewMeter()),
+		)
+	}
+
 	return &Subscriber{
-		config:      config,
-		logger:      logger,
-		adminClient: adminClient,
-		stopping:    make(chan struct{}),
-		closing:     make(chan struct{}),
+		config:       config,
+		logger:       logger,
+		adminClient:  adminClient,
+		kotelService: ks,
+		stopping:     make(chan struct{}),
+		closing:      make(chan struct{}),
 	}, nil
 }
 
@@ -308,6 +322,11 @@ func (s *Subscriber) subscriberOptions(topic string) []kgo.Opt {
 
 	if s.config.SASLMechanism != nil {
 		opts = append(opts, kgo.SASL(s.config.SASLMechanism))
+	}
+
+	// OTel hooks
+	if s.kotelService != nil {
+		opts = append(opts, kgo.WithHooks(s.kotelService.Hooks()...))
 	}
 
 	// Allow overriding with custom opts
