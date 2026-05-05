@@ -8,6 +8,7 @@ require (
 	github.com/twmb/franz-go v1.21.0
 	github.com/twmb/franz-go/pkg/kadm v1.18.0
 	github.com/twmb/franz-go/plugin/kotel v1.6.0
+	go.opentelemetry.io/otel/trace v1.34.0
 )
 
 require (
@@ -27,7 +28,6 @@ require (
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/otel v1.34.0 // indirect
 	go.opentelemetry.io/otel/metric v1.34.0 // indirect
-	go.opentelemetry.io/otel/trace v1.34.0 // indirect
 	golang.org/x/crypto v0.50.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
