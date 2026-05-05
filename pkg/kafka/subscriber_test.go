@@ -73,3 +73,64 @@ func TestSubscribeInitialize_ClosedSubscriber(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "subscriber closed")
 }
+
+func TestStop_RejectsNewSubscriptions(t *testing.T) {
+	config := DefaultSubscriberConfig()
+	config.Brokers = []string{"127.0.0.1:9092"}
+
+	logger := watermill.NewStdLogger(false, false)
+	subscriber, err := NewSubscriber(config, logger)
+	require.NoError(t, err)
+	defer func() { _ = subscriber.Close() }()
+
+	err = subscriber.Stop()
+	require.NoError(t, err)
+
+	_, err = subscriber.Subscribe(t.Context(), "test-topic")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "subscriber stopped")
+}
+
+func TestStop_Idempotent(t *testing.T) {
+	config := DefaultSubscriberConfig()
+	config.Brokers = []string{"127.0.0.1:9092"}
+
+	logger := watermill.NewStdLogger(false, false)
+	subscriber, err := NewSubscriber(config, logger)
+	require.NoError(t, err)
+	defer func() { _ = subscriber.Close() }()
+
+	require.NoError(t, subscriber.Stop())
+	require.NoError(t, subscriber.Stop())
+	require.NoError(t, subscriber.Stop())
+}
+
+func TestClose_AlsoStops(t *testing.T) {
+	config := DefaultSubscriberConfig()
+	config.Brokers = []string{"127.0.0.1:9092"}
+
+	logger := watermill.NewStdLogger(false, false)
+	subscriber, err := NewSubscriber(config, logger)
+	require.NoError(t, err)
+
+	err = subscriber.Close()
+	require.NoError(t, err)
+
+	_, err = subscriber.Subscribe(t.Context(), "test-topic")
+	assert.Error(t, err)
+}
+
+func TestStop_ThenClose(t *testing.T) {
+	config := DefaultSubscriberConfig()
+	config.Brokers = []string{"127.0.0.1:9092"}
+
+	logger := watermill.NewStdLogger(false, false)
+	subscriber, err := NewSubscriber(config, logger)
+	require.NoError(t, err)
+
+	require.NoError(t, subscriber.Stop())
+	require.NoError(t, subscriber.Close())
+
+	_, err = subscriber.Subscribe(t.Context(), "test-topic")
+	assert.Error(t, err)
+}
