@@ -104,7 +104,7 @@ func (p *Publisher) Publish(topic string, msgs ...*message.Message) error {
 		records[i] = record
 	}
 
-	ctx, ctxCancel := context.WithTimeout(msgs[0].Context(), p.config.ProduceRequestTimeout)
+	ctx, ctxCancel := context.WithTimeout(context.Background(), p.config.ProduceRequestTimeout)
 	defer ctxCancel()
 
 	result := p.client.ProduceSync(ctx, records...)
