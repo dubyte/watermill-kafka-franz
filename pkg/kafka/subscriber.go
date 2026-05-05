@@ -28,6 +28,8 @@ type Subscriber struct {
 	// to avoid re-registering metric instruments on every subscription.
 	kotelService *kotel.Kotel
 
+	stopping      chan struct{}
+	stopped       uint32 // atomic
 	closing       chan struct{}
 	subscribersWg sync.WaitGroup
 	closed        uint32 // atomic
@@ -79,6 +81,7 @@ func NewSubscriber(config SubscriberConfig, logger watermill.LoggerAdapter) (*Su
 		logger:       logger,
 		adminClient:  adminClient,
 		kotelService: ks,
+		stopping:     make(chan struct{}),
 		closing:      make(chan struct{}),
 	}, nil
 }
@@ -140,6 +143,10 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 		return nil, errors.New("subscriber closed")
 	}
 
+	if atomic.LoadUint32(&s.stopped) == 1 {
+		return nil, errors.New("subscriber stopped")
+	}
+
 	// Create a new client for this subscription to ensure isolation.
 	// Dedicated clients are used to prevent cross-topic message "stealing"
 	// in concurrent polling scenarios.
@@ -181,7 +188,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 
 		go func() {
 			select {
-			case <-s.closing:
+			case <-s.stopping:
 				cancel()
 			case <-runCtx.Done():
 			}
@@ -390,11 +397,33 @@ ResendLoop:
 	return nil
 }
 
+// Stop signals the subscriber to stop consuming new messages while allowing
+// in-flight messages to be acked or nacked. After Stop, Subscribe and
+// SubscribeInitialize will reject new calls. Existing subscription goroutines
+// finish processing their current batch and then exit.
+//
+// Stop is intended for graceful shutdown scenarios. Call Stop first to drain
+// in-flight messages, then call Close to complete the shutdown.
+//
+// It is safe to call Stop multiple times.
+func (s *Subscriber) Stop() error {
+	if !atomic.CompareAndSwapUint32(&s.stopped, 0, 1) {
+		return nil
+	}
+
+	s.logger.Debug("Subscriber: stopping subscriber", nil)
+	close(s.stopping)
+	return nil
+}
+
 // Close implements message.Subscriber.
 func (s *Subscriber) Close() error {
 	if !atomic.CompareAndSwapUint32(&s.closed, 0, 1) {
 		return nil
 	}
+
+	// Stop fetching new messages first.
+	_ = s.Stop()
 
 	s.logger.Debug("Subscriber: closing subscriber", nil)
 	close(s.closing)
@@ -418,6 +447,10 @@ func (s *Subscriber) Close() error {
 func (s *Subscriber) SubscribeInitialize(topic string) error {
 	if atomic.LoadUint32(&s.closed) == 1 {
 		return errors.New("subscriber closed")
+	}
+
+	if atomic.LoadUint32(&s.stopped) == 1 {
+		return errors.New("subscriber stopped")
 	}
 
 	// Create admin client
