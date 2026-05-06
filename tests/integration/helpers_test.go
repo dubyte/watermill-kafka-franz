@@ -68,6 +68,9 @@ func newPublisher(t *testing.T) *kafka.Publisher {
 	cfg := kafka.DefaultPublisherConfig()
 	cfg.Brokers = []string{redpandaAddr}
 	cfg.DisableIdempotentWrite = true
+	// AllowAutoTopicCreation lets the first produce on a new topic succeed
+	// instead of returning UNKNOWN_TOPIC_OR_PARTITION while the broker creates it.
+	cfg.OverwriteKgoOpts = []kgo.Opt{kgo.AllowAutoTopicCreation()}
 	logger := watermill.NewStdLogger(false, false)
 	pub, err := kafka.NewPublisher(cfg, logger)
 	require.NoError(t, err)
@@ -393,9 +396,12 @@ func drainAndAck(ch <-chan *message.Message) <-chan string {
 	return out
 }
 
-// deleteGroupOffsets deletes the committed offsets for a consumer group on a
-// specific topic using the Kafka admin API.  This simulates an offset-out-of-range
+// deleteGroupOffsets deletes the committed offsets for a consumer group on
+// partition 0 of the given topic.  This simulates an offset-out-of-range
 // scenario where the broker has expired the offsets.
+//
+// Note: kadm.TopicsSet requires an explicit partition list — a nil slice means
+// "no partitions" and would silently delete nothing.
 func deleteGroupOffsets(t *testing.T, group, topic string) {
 	t.Helper()
 	client, err := kgo.NewClient(kgo.SeedBrokers(redpandaAddr))
@@ -406,6 +412,6 @@ func deleteGroupOffsets(t *testing.T, group, topic string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	_, err = adm.DeleteOffsets(ctx, group, kadm.TopicsSet{topic: nil})
+	_, err = adm.DeleteOffsets(ctx, group, kadm.TopicsSet{topic: {0: {}}})
 	require.NoError(t, err)
 }
