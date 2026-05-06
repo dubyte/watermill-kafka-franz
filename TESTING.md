@@ -4,12 +4,34 @@
 
 This document describes the testing methodology, bug findings, and integration test battery for the `watermill-kafka-franz` subscriber and publisher.
 
-Tests are split into two layers:
+Tests are split into three distinct layers, each with a single gating mechanism:
 
-| Layer | Location | Broker required | Run with |
-|---|---|---|---|
-| Unit / short | `pkg/kafka/` | No | `make test-short` |
-| Integration | `tests/integration/` | Yes (Redpanda) | `make test-integration` |
+| Layer | Purpose | Location | Files | Broker | Run with |
+|---|---|---|---|---|---|
+| **Unit** | Pure Go logic — config, marshaling, state machines | `pkg/kafka/` | `*_test.go` | No | `make test-short` |
+| **Watermill compliance** | Verifies the library correctly implements the `message.Publisher` / `message.Subscriber` interface contract using watermill's own test suite | `pkg/kafka/` | `*_integration_test.go` | Yes | `make test-integration` |
+| **Kafka behaviour** | At-least-once semantics, network faults, rebalancing, poison pills — use-case driven | `tests/integration/` | `*_test.go` | Yes + Toxiproxy | `make test-integration` |
+
+**Gating rule:** any file that requires a broker carries `//go:build integration`. Running `go test ./...` without that tag is always safe — no broker needed, no hangs.
+
+```
+pkg/kafka/
+  config_test.go               ← unit
+  marshaler_test.go            ← unit
+  publisher_test.go            ← unit
+  subscriber_test.go           ← unit
+  publisher_integration_test.go  ← compliance (//go:build integration)
+  subscriber_integration_test.go ← compliance (//go:build integration)
+  pubsub_integration_test.go     ← compliance (//go:build integration)
+
+tests/integration/
+  helpers_test.go              ← behaviour helpers (//go:build integration)
+  lifecycle_test.go            ← behaviour (//go:build integration)
+  at_least_once_test.go        ← behaviour (//go:build integration)
+  poison_pill_test.go          ← behaviour (//go:build integration)
+  network_fault_test.go        ← behaviour (//go:build integration)
+  rebalance_test.go            ← behaviour (//go:build integration)
+```
 
 ---
 

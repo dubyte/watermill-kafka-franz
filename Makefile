@@ -19,8 +19,8 @@ help:
 	@echo ""
 	@echo "$(GREEN)Development:$(NC)"
 	@echo "  make test              - Run all tests (starts Redpanda, runs, stops)"
-	@echo "  make test-integration  - Run integration tests only (requires Redpanda running)"
-	@echo "  make test-short        - Run unit tests only (no broker required)"
+	@echo "  make test-integration  - Run compliance + behaviour tests (requires Redpanda running)"
+	@echo "  make test-short        - Run unit tests only — no broker, no build tag"
 	@echo "  make lint              - Run golangci-lint"
 	@echo "  make tidy              - Tidy go modules"
 	@echo ""
@@ -93,15 +93,20 @@ test: docker-up-redpanda wait-for-redpanda
 	go test -v -race -tags integration ./...
 	$(MAKE) docker-down
 
-# Run only integration-tagged tests against an already-running Redpanda
+# Run integration-tagged tests against an already-running Redpanda.
+# Covers both layers:
+#   pkg/kafka/          — watermill compliance tests (*_integration_test.go)
+#   tests/integration/  — Kafka behaviour tests (at-least-once, network faults, …)
 test-integration:
 	@echo "$(BLUE)Running integration tests (requires Redpanda at 127.0.0.1:9092)...$(NC)"
-	go test -v -race -tags integration ./tests/integration/...
+	go test -v -race -tags integration ./...
 	@echo "$(GREEN)Integration tests complete.$(NC)"
 
-# Run unit tests only (skips integration tests)
+# Run unit tests only — no broker required.
+# Integration tests are excluded automatically because they carry the
+# //go:build integration tag and no -tags flag is passed here.
 test-short:
-	go test -v -short ./...
+	go test -v ./pkg/kafka/...
 
 # Run golangci-lint
 lint: check-lint
