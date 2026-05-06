@@ -159,6 +159,18 @@ func ackAll(msgs []*message.Message) {
 	}
 }
 
+// uuidsOf extracts the UUID field from each message. Use this before asserting
+// equality so the test never holds a *message.Message pointer during assertions
+// (avoiding data races with the subscriber goroutine that may cancel the
+// message context after an Ack).
+func uuidsOf(msgs []*message.Message) []string {
+	out := make([]string, len(msgs))
+	for i, m := range msgs {
+		out[i] = m.UUID
+	}
+	return out
+}
+
 // ---------------------------------------------------------------------------
 // poisonPillUnmarshaler
 // ---------------------------------------------------------------------------

@@ -63,14 +63,14 @@ func TestSubscriber_PoisonPill_DoesNotBlockSubsequentMessages(t *testing.T) {
 	// Receive and ack the first three valid messages.
 	firstBatch := collectMessages(t, ch, 3, 15*time.Second)
 	require.Len(t, firstBatch, 3, "expected first three valid messages (offsets 0-2)")
-	assert.ElementsMatch(t, firstUUIDs, firstBatch)
+	assert.ElementsMatch(t, firstUUIDs, uuidsOf(firstBatch))
 
 	// After fix #2 the poison pill at offset 3 is skipped and messages at
 	// offsets 4-6 are delivered.  Before the fix this times out.
 	secondBatch := collectMessages(t, ch, 3, 10*time.Second)
 	assert.Len(t, secondBatch, 3,
 		"expected second batch of valid messages (offsets 4-6) after poison pill at offset 3 is skipped")
-	assert.ElementsMatch(t, secondUUIDs, secondBatch)
+	assert.ElementsMatch(t, secondUUIDs, uuidsOf(secondBatch))
 }
 
 // TestSubscriber_PoisonPill_PartitionDoesNotStallAfterRebalance verifies that
@@ -112,7 +112,7 @@ func TestSubscriber_PoisonPill_PartitionDoesNotStallAfterRebalance(t *testing.T)
 	require.NoError(t, err)
 
 	received1 := collectMessages(t, ch1, 1, 15*time.Second)
-	require.Equal(t, firstValid, received1,
+	require.Equal(t, firstValid, uuidsOf(received1),
 		"Subscribe1 should receive the first valid message")
 
 	// Allow auto-commit to flush the acknowledged offset.
@@ -137,7 +137,7 @@ func TestSubscriber_PoisonPill_PartitionDoesNotStallAfterRebalance(t *testing.T)
 	// With fix #2 the poison pill at offset 1 is skipped and offset 2 arrives.
 	// Without the fix this times out.
 	received2 := collectMessages(t, ch2, 1, 10*time.Second)
-	assert.Equal(t, thirdValid, received2,
+	assert.Equal(t, thirdValid, uuidsOf(received2),
 		"Subscribe2 should receive the valid message at offset 2 (poison pill at offset 1 skipped)")
 }
 
@@ -172,7 +172,7 @@ func TestSubscriber_PoisonPill_ErrorIsLogged(t *testing.T) {
 	// Wait for the valid message — only succeeds with fix #2 applied because the
 	// poison pill must have been skipped first.
 	received := collectMessages(t, ch, 1, 15*time.Second)
-	require.Equal(t, validUUIDs, received,
+	require.Equal(t, validUUIDs, uuidsOf(received),
 		"valid message should be delivered after the poison pill is skipped")
 
 	// Verify that an error was logged for the poison pill.
