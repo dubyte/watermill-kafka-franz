@@ -174,24 +174,32 @@ config.TLS = &tls.Config{
 
 ## Testing
 
-Start Kafka with Docker Compose:
+Tests are organised in three layers. See [TESTING.md](TESTING.md) for the full methodology and bug catalogue.
+
+| Layer | What | Location | Needs broker |
+|---|---|---|---|
+| Unit | Config, marshaling, state machines | `pkg/kafka/*_test.go` | No |
+| Watermill compliance | `message.Publisher` / `message.Subscriber` contract via watermill's test suite | `pkg/kafka/*_integration_test.go` | Yes |
+| Kafka behaviour | At-least-once delivery, network faults, rebalancing, poison pills | `tests/integration/` | Yes + Toxiproxy |
+
+**Any file that requires a broker carries `//go:build integration`.  
+Running `go test ./...` without that tag is always safe — no broker, no hangs.**
+
+### Quick start
 
 ```bash
-docker-compose up -d
+# Unit tests — no broker required
+make test-short
+
+# All tests — starts Redpanda + Toxiproxy, runs, tears down
+make test
+
+# Integration tests against an already-running stack
+make docker-up && make wait-for-redpanda
+make test-integration
 ```
 
-Run tests:
-
-```bash
-# Unit tests only
-go test -short ./...
-
-# All tests (requires Kafka)
-go test ./...
-
-# With race detector
-go test -race ./...
-```
+The stack uses [Redpanda](https://redpanda.com) (Kafka-compatible, ~2 s startup) and [Toxiproxy](https://github.com/Shopify/toxiproxy) for network-fault injection.
 
 ## Why Franz-Go?
 
