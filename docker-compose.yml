@@ -1,52 +1,60 @@
 # Docker Compose configuration for integration tests
 #
-# Usage:
-#   1. Start Kafka infrastructure: docker-compose up -d
-#   2. Wait for Kafka to be ready: docker-compose logs -f kafka
-#   3. Run integration tests: go test ./pkg/kafka/... -v
-#   4. Stop infrastructure: docker-compose down
+# Services:
+#   - Redpanda: Kafka-compatible broker (host: 127.0.0.1:9092, container: redpanda:29092)
+#   - Toxiproxy: Fault-injection proxy (kafka proxy: host 19092 -> redpanda:9092, control API: 8474)
 #
-# The Kafka broker is available at localhost:9092
-# Internal communication uses kafka:29092
+# Usage:
+#   1. Start: docker compose up -d
+#   2. Wait:  make wait-for-redpanda
+#   3. Test:  make test-integration
+#   4. Stop:  docker compose down
 
 services:
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.5.0
-    container_name: watermill-kafka-zookeeper
-    hostname: zookeeper
-    ports:
-      - "2181:2181"
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-    healthcheck:
-      test: ["CMD", "bash", "-c", "echo 'ruok' | nc localhost 2181"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  kafka:
-    image: confluentinc/cp-kafka:7.5.0
-    container_name: watermill-kafka-broker
-    hostname: kafka
-    depends_on:
-      zookeeper:
-        condition: service_healthy
+  redpanda:
+    image: redpandadata/redpanda:v24.1.2
+    container_name: watermill-redpanda
+    hostname: redpanda
+    command:
+      - redpanda
+      - start
+      - --mode
+      - dev-container
+      - --check=false
+      - --kafka-addr
+      - internal://0.0.0.0:29092,external://0.0.0.0:9092
+      - --advertise-kafka-addr
+      - internal://redpanda:29092,external://127.0.0.1:9092
+      - --pandaproxy-addr
+      - internal://0.0.0.0:28082,external://0.0.0.0:8082
+      - --advertise-pandaproxy-addr
+      - internal://redpanda:28082,external://127.0.0.1:8082
+      - --schema-registry-addr
+      - internal://0.0.0.0:28081,external://0.0.0.0:8081
+      - --rpc-addr
+      - redpanda:33145
+      - --advertise-rpc-addr
+      - redpanda:33145
     ports:
       - "9092:9092"
-      - "29092:29092"
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,HOST://localhost:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: true
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      - "8081:8081"
+      - "8082:8082"
     healthcheck:
-      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true' || rpk cluster health"]
       interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    container_name: watermill-toxiproxy
+    hostname: toxiproxy
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    ports:
+      - "8474:8474"
+      - "19092:19092"
+    command:
+      - -host=0.0.0.0
