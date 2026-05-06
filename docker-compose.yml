@@ -12,7 +12,7 @@
 
 services:
   redpanda:
-    image: redpandadata/redpanda:v24.1.2
+    image: redpandadata/redpanda:v26.1.6
     container_name: watermill-redpanda
     hostname: redpanda
     command:
