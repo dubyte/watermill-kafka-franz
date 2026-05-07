@@ -1,11 +1,14 @@
 package kafka
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 // Unit tests for Subscriber — no broker required.
@@ -120,4 +123,40 @@ func TestStop_ThenClose(t *testing.T) {
 
 	_, err = subscriber.Subscribe(t.Context(), "test-topic")
 	assert.Error(t, err)
+}
+
+func TestSkipUnmarshalErrorHandler_ReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	logger := watermill.NewStdLogger(false, false)
+	handler := SkipUnmarshalErrorHandler(logger)
+
+	record := &kgo.Record{Topic: "test-topic", Partition: 0, Offset: 42}
+	unmarshalErr := errors.New("invalid protobuf payload")
+
+	result := handler(context.Background(), record, unmarshalErr)
+	assert.NoError(t, result, "SkipUnmarshalErrorHandler must return nil to signal skip")
+}
+
+func TestUnmarshalErrorHandler_ErrorReturn_StopsSubscriber(t *testing.T) {
+	t.Parallel()
+
+	sentinel := errors.New("DLQ unavailable, stop consumer")
+	handler := UnmarshalErrorHandler(func(_ context.Context, _ *kgo.Record, _ error) error {
+		return sentinel
+	})
+
+	record := &kgo.Record{Topic: "test-topic", Partition: 1, Offset: 7}
+	unmarshalErr := errors.New("bad message")
+
+	result := handler(context.Background(), record, unmarshalErr)
+	assert.ErrorIs(t, result, sentinel, "handler returning non-nil must propagate error to stop the subscriber goroutine")
+}
+
+func TestOnUnmarshalError_DefaultIsNil(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultSubscriberConfig()
+	assert.Nil(t, cfg.OnUnmarshalError,
+		"OnUnmarshalError must default to nil (fail-fast) — silent skip must be opt-in")
 }

@@ -106,6 +106,8 @@ config := kafka.SubscriberConfig{
     NackResendSleep:        100 * time.Millisecond,
     FetchMaxBytes:          50 << 20, // 50MB
     ClientID:               "my-app",
+    // OnUnmarshalError: nil (default) = fail fast on poison pills
+    // OnUnmarshalError: kafka.SkipUnmarshalErrorHandler(logger) = skip and continue
 }
 ```
 
@@ -137,6 +139,36 @@ if err != nil {
 ```
 
 Partition count and replication factor are controlled by `InitializeTopicPartitions` and `InitializeTopicReplicationFactor` on `SubscriberConfig` (both default to 1).
+
+### Poison Pill Handling (Unmarshal Errors)
+
+By default, if a Kafka record cannot be unmarshalled, the subscriber **fails fast**: it logs the error and stops the goroutine without committing the offset. The record is redelivered on the next startup. This is the safe default for financial systems.
+
+> **BREAKING CHANGE (v0.x → current):** Previous versions silently committed and skipped unprocessable records. To restore that behavior, set `OnUnmarshalError` to `SkipUnmarshalErrorHandler`.
+
+Configure via `SubscriberConfig.OnUnmarshalError`:
+
+```go
+// Default (nil): fail fast — subscriber stops, offset not committed, record redelivered.
+config := kafka.DefaultSubscriberConfig()
+// config.OnUnmarshalError is nil → fail-fast
+
+// Skip and continue (previous behavior):
+config.OnUnmarshalError = kafka.SkipUnmarshalErrorHandler(logger)
+
+// Custom handler (e.g. send to DLQ):
+config.OnUnmarshalError = func(ctx context.Context, record *kgo.Record, err error) error {
+    // publish record.Value to a dead-letter topic, then return nil to skip
+    return dlqPublisher.Publish(ctx, record, err)
+    // or return err to stop the subscriber
+}
+```
+
+| `OnUnmarshalError` return value | Behavior |
+|---|---|
+| Field is `nil` (default) | Fail fast: log error, stop goroutine, no commit — record redelivered |
+| Callback returns `nil` | Skip: commit offset, continue to next record |
+| Callback returns non-nil error | Stop: log error, stop goroutine, no commit |
 
 ### Context Metadata
 

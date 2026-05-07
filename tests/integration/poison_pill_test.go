@@ -54,6 +54,7 @@ func TestSubscriber_PoisonPill_DoesNotBlockSubsequentMessages(t *testing.T) {
 	cfg := defaultSubscriberConfig("test-poison-pill-1-" + watermill.NewShortUUID())
 	cfg.Unmarshaler = poisonPillUnmarshaler{}
 	cfg.AutoCommitInterval = 500 * time.Millisecond
+	cfg.OnUnmarshalError = kafka.SkipUnmarshalErrorHandler(watermill.NewStdLogger(false, false))
 
 	sub := newSubscriber(t, cfg)
 
@@ -105,6 +106,7 @@ func TestSubscriber_PoisonPill_PartitionDoesNotStallAfterRebalance(t *testing.T)
 	cfg1 := defaultSubscriberConfig(group)
 	cfg1.Unmarshaler = poisonPillUnmarshaler{}
 	cfg1.AutoCommitInterval = 200 * time.Millisecond
+	cfg1.OnUnmarshalError = kafka.SkipUnmarshalErrorHandler(watermill.NewStdLogger(false, false))
 
 	sub1 := newSubscriber(t, cfg1)
 
@@ -128,6 +130,7 @@ func TestSubscriber_PoisonPill_PartitionDoesNotStallAfterRebalance(t *testing.T)
 	cfg2 := defaultSubscriberConfig(group)
 	cfg2.Unmarshaler = poisonPillUnmarshaler{}
 	cfg2.AutoCommitInterval = 200 * time.Millisecond
+	cfg2.OnUnmarshalError = kafka.SkipUnmarshalErrorHandler(watermill.NewStdLogger(false, false))
 
 	sub2 := newSubscriber(t, cfg2)
 
@@ -155,6 +158,7 @@ func TestSubscriber_PoisonPill_ErrorIsLogged(t *testing.T) {
 	cfg := defaultSubscriberConfig("test-poison-logged-" + watermill.NewShortUUID())
 	cfg.Unmarshaler = poisonPillUnmarshaler{}
 	cfg.AutoCommitInterval = 300 * time.Millisecond
+	cfg.OnUnmarshalError = kafka.SkipUnmarshalErrorHandler(logger)
 
 	sub, err := kafka.NewSubscriber(cfg, logger)
 	require.NoError(t, err)

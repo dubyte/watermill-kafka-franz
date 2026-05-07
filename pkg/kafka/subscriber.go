@@ -257,12 +257,17 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 
 				msg, err := s.config.Unmarshaler.Unmarshal(record)
 				if err != nil {
-					s.logger.Error("Cannot unmarshal message, skipping record", err, watermill.LogFields{
+					s.logger.Error("Cannot unmarshal message", err, watermill.LogFields{
 						"topic":     record.Topic,
 						"partition": record.Partition,
 						"offset":    record.Offset,
 					})
-					// Commit past the poison pill so it is never redelivered.
+					if s.config.OnUnmarshalError == nil {
+						return
+					}
+					if cbErr := s.config.OnUnmarshalError(runCtx, record, err); cbErr != nil {
+						return
+					}
 					client.MarkCommitRecords(record)
 					if s.config.DisableAutoCommit {
 						commitCtx, commitCancel := context.WithTimeout(context.Background(), s.config.CommitTimeout)

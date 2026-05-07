@@ -1,10 +1,12 @@
 package kafka
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"time"
 
+	"github.com/ThreeDotsLabs/watermill"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl"
 )
@@ -58,6 +60,40 @@ type PublisherConfig struct {
 	// OTelEnabled enables OpenTelemetry tracing and metrics via the kotel plugin.
 	// Requires a global OTel TracerProvider and MeterProvider to be configured.
 	OTelEnabled bool
+}
+
+// UnmarshalErrorHandler is called when a Kafka record cannot be unmarshalled.
+//
+// ctx is the subscription context (cancelled when the subscriber is closed or stopped).
+// Returning nil skips the record: its offset is committed and consumption continues.
+// Returning a non-nil error stops the subscriber goroutine with that error.
+//
+// If OnUnmarshalError is not set (nil), the subscriber fails fast: it logs the
+// error and returns without committing the offset — the same safe default as
+// watermill-kafka (Sarama). The message will be redelivered on restart.
+//
+// BREAKING CHANGE from the previous default behavior: Prior versions silently
+// committed and skipped unprocessable records. To restore that behavior, set:
+//
+//	config.OnUnmarshalError = kafka.SkipUnmarshalErrorHandler(logger)
+type UnmarshalErrorHandler func(ctx context.Context, record *kgo.Record, err error) error
+
+// SkipUnmarshalErrorHandler returns an UnmarshalErrorHandler that logs the
+// error and skips the record by returning nil, causing the subscriber to
+// commit the offset and continue consuming.
+//
+// This restores the previous (pre-breaking-change) behavior and is suitable
+// when redelivery of poison-pill messages is undesirable and data loss is
+// explicitly accepted (e.g. non-critical event streams).
+func SkipUnmarshalErrorHandler(logger watermill.LoggerAdapter) UnmarshalErrorHandler {
+	return func(_ context.Context, record *kgo.Record, err error) error {
+		logger.Error("Skipping unprocessable record", err, watermill.LogFields{
+			"topic":     record.Topic,
+			"partition": record.Partition,
+			"offset":    record.Offset,
+		})
+		return nil
+	}
 }
 
 // SubscriberConfig configures the Kafka Subscriber.
@@ -147,6 +183,10 @@ type SubscriberConfig struct {
 	// InitializeTopicReplicationFactor is the replication factor for topics created by SubscribeInitialize.
 	// Defaults to 1.
 	InitializeTopicReplicationFactor int16
+
+	// OnUnmarshalError is called when a Kafka record cannot be unmarshalled.
+	// See UnmarshalErrorHandler for full semantics. Defaults to nil (fail-fast, no silent data loss).
+	OnUnmarshalError UnmarshalErrorHandler
 }
 
 // Validate checks that the PublisherConfig has all required fields set.
