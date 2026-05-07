@@ -101,7 +101,8 @@ config := kafka.SubscriberConfig{
     HeartbeatInterval:      3 * time.Second,
     SessionTimeout:         45 * time.Second,
     AutoCommitInterval:     5 * time.Second,
-    DisableAutoCommit:      false,
+    DisableAutoCommit:      false,           // set true for manual commits (e.g. exactly-once processors)
+    CommitTimeout:          10 * time.Second, // timeout for manual commits when DisableAutoCommit=true
     NackResendSleep:        100 * time.Millisecond,
     FetchMaxBytes:          50 << 20, // 50MB
     ClientID:               "my-app",
@@ -123,6 +124,19 @@ func (m MyMarshaler) Unmarshal(record *kgo.Record) (*message.Message, error) {
     // Custom deserialization logic
 }
 ```
+
+### Auto-Creating Topics
+
+The subscriber implements Watermill's `SubscribeInitializer` interface. Call `SubscribeInitialize` to create the topic before consuming (idempotent — a no-op if the topic already exists):
+
+```go
+err := subscriber.SubscribeInitialize("my-topic")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+Partition count and replication factor are controlled by `InitializeTopicPartitions` and `InitializeTopicReplicationFactor` on `SubscriberConfig` (both default to 1).
 
 ### Context Metadata
 
@@ -174,7 +188,7 @@ config.TLS = &tls.Config{
 
 ## Testing
 
-Tests are organised in three layers. See [TESTING.md](TESTING.md) for the full methodology and bug catalogue.
+Tests are organised in three layers. See [TESTING.md](TESTING.md) for the full methodology.
 
 | Layer | What | Location | Needs broker |
 |---|---|---|---|
