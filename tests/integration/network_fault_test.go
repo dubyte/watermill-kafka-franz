@@ -20,6 +20,7 @@ package integration_test
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -32,6 +33,7 @@ import (
 	"github.com/dubyte/watermill-kafka-franz/pkg/kafka"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 // Proxy listen ports — one unique port per test to prevent bind conflicts when
@@ -87,6 +89,19 @@ func subscribeVia(t *testing.T, brokerAddr, topic string, extra ...func(*kafka.S
 	cfg.Brokers = []string{brokerAddr}
 	cfg.ConsumerGroup = "cg-" + t.Name()
 	cfg.AutoOffsetReset = "earliest"
+
+	// Force all broker TCP connections through brokerAddr (the Toxiproxy
+	// listen address) regardless of the advertised address returned in Kafka
+	// metadata responses.  Without this, Redpanda's metadata reply advertises
+	// its external address (127.0.0.1:9092) and franz-go would open new
+	// connections directly to the broker, bypassing the proxy entirely.
+	var d net.Dialer
+	cfg.OverwriteKgoOpts = append(cfg.OverwriteKgoOpts,
+		kgo.Dialer(func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return d.DialContext(ctx, network, brokerAddr)
+		}),
+	)
+
 	for _, fn := range extra {
 		fn(&cfg)
 	}
@@ -168,7 +183,7 @@ func TestSubscriber_Network_BrokerRestartRecovery(t *testing.T) {
 	proxyAddr := "127.0.0.1:" + portBrokerRestart
 
 	// Create proxy: subscriber connects through it so we can inject faults.
-	createToxiproxy(t, proxyName, "0.0.0.0:"+portBrokerRestart, "127.0.0.1:9092")
+	createToxiproxy(t, proxyName, "0.0.0.0:"+portBrokerRestart, redpandaInternal)
 
 	// Pre-publish 5 messages directly to Redpanda (bypassing the proxy) so
 	// they sit in the partition before the subscriber starts.
@@ -244,7 +259,7 @@ func TestSubscriber_Network_HighLatency_NoTimeout(t *testing.T) {
 	proxyName := "kafka-high-latency"
 	proxyAddr := "127.0.0.1:" + portHighLatency
 
-	createToxiproxy(t, proxyName, "0.0.0.0:"+portHighLatency, "127.0.0.1:9092")
+	createToxiproxy(t, proxyName, "0.0.0.0:"+portHighLatency, redpandaInternal)
 
 	// Add 500 ms latency with 100 ms jitter on the downstream direction.
 	// This delays every byte travelling from the broker to the consumer, so
@@ -307,7 +322,7 @@ func TestSubscriber_Network_CommitTimeout_UnderDisableAutoCommit(t *testing.T) {
 	proxyName := "kafka-commit-timeout"
 	proxyAddr := "127.0.0.1:" + portCommitTimeout
 
-	createToxiproxy(t, proxyName, "0.0.0.0:"+portCommitTimeout, "127.0.0.1:9092")
+	createToxiproxy(t, proxyName, "0.0.0.0:"+portCommitTimeout, redpandaInternal)
 
 	// Publish 3 messages before subscribing.
 	publishDirect(t, topic, 3)
@@ -323,6 +338,14 @@ func TestSubscriber_Network_CommitTimeout_UnderDisableAutoCommit(t *testing.T) {
 	subCfg.DisableAutoCommit = true
 	// CommitTimeout=1s ensures the injected toxic (2000ms) reliably outlasts it.
 	subCfg.CommitTimeout = 1 * time.Second
+	// Force all broker connections through proxyAddr so that the commit-block
+	// toxic actually intercepts CommitRecords traffic (same fix as subscribeVia).
+	var commitDialer net.Dialer
+	subCfg.OverwriteKgoOpts = append(subCfg.OverwriteKgoOpts,
+		kgo.Dialer(func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return commitDialer.DialContext(ctx, network, proxyAddr)
+		}),
+	)
 
 	sub, err := kafka.NewSubscriber(subCfg, errLog)
 	require.NoError(t, err)
@@ -357,11 +380,17 @@ func TestSubscriber_Network_CommitTimeout_UnderDisableAutoCommit(t *testing.T) {
 	var msg2 *message.Message
 	select {
 	case msg2 = <-ch:
-		// BUG PRESENT: msg2 was delivered despite msg1's commit failing.
-		// The subscriber should have surfaced the commit error instead of
-		// silently continuing.
-		t.Log("BUG #4 present: msg2 delivered immediately after silently-swallowed CommitRecords failure")
-		msg2.Ack()
+		if msg2 != nil {
+			// BUG PRESENT: msg2 was delivered despite msg1's commit failing.
+			// The subscriber should have surfaced the commit error instead of
+			// silently continuing.
+			t.Log("BUG #4 present: msg2 delivered immediately after silently-swallowed CommitRecords failure")
+			msg2.Ack()
+		} else {
+			// Channel was closed because the subscriber exited on CommitRecords
+			// failure — this is the fixed behaviour (Bug #4 resolved).
+			t.Log("Channel closed after CommitRecords failure — subscriber exited cleanly (Bug #4 fixed)")
+		}
 	case <-time.After(5 * time.Second):
 		// After the fix the subscriber should have exited or re-delivered msg1;
 		// reaching this branch means the bug is no longer present.
@@ -410,14 +439,7 @@ func TestSubscriber_Network_SlowConsumer_NoSessionExpiry(t *testing.T) {
 	proxyName := "kafka-slow-consumer"
 	proxyAddr := "127.0.0.1:" + portSlowConsumer
 
-	createToxiproxy(t, proxyName, "0.0.0.0:"+portSlowConsumer, "127.0.0.1:9092")
-
-	// 4 s latency simulates a very slow network link without breaking the connection.
-	addToxic(t, proxyName, "slow-net", "latency", "downstream", map[string]interface{}{
-		"latency":  4000, // ms
-		"jitter":   0,
-		"toxicity": 1.0,
-	})
+	createToxiproxy(t, proxyName, "0.0.0.0:"+portSlowConsumer, redpandaInternal)
 
 	publishDirect(t, topic, 1)
 
@@ -429,6 +451,22 @@ func TestSubscriber_Network_SlowConsumer_NoSessionExpiry(t *testing.T) {
 			cfg.HeartbeatInterval = 3 * time.Second
 		},
 	)
+
+	// Give the subscriber goroutine time to complete the consumer-group join
+	// protocol before injecting latency.  Subscribe() returns immediately (the
+	// group-join happens in a background goroutine), so without this brief pause
+	// the toxic would be active during JoinGroup/SyncGroup responses.  With
+	// SessionTimeout=10s those 4s-delayed responses would push setup past the
+	// session deadline and the first PollFetches would never deliver the message
+	// within receiveOne's 30s window.
+	time.Sleep(2 * time.Second)
+
+	// 4 s latency simulates a very slow network link without breaking the connection.
+	addToxic(t, proxyName, "slow-net", "latency", "downstream", map[string]interface{}{
+		"latency":  4000, // ms
+		"jitter":   0,
+		"toxicity": 1.0,
+	})
 
 	msg := receiveOne(t, ch, 30*time.Second)
 
@@ -481,7 +519,7 @@ func TestSubscriber_Network_ConnectionDropDuringFetch_Recovers(t *testing.T) {
 	proxyName := "kafka-conn-drop"
 	proxyAddr := "127.0.0.1:" + portConnDropDuringFetch
 
-	createToxiproxy(t, proxyName, "0.0.0.0:"+portConnDropDuringFetch, "127.0.0.1:9092")
+	createToxiproxy(t, proxyName, "0.0.0.0:"+portConnDropDuringFetch, redpandaInternal)
 
 	const msgCount = 10
 	publishDirect(t, topic, msgCount)
@@ -567,7 +605,7 @@ func TestSubscriber_Network_IsClientClosedSpin_Fix(t *testing.T) {
 	proxyName := "kafka-client-closed-spin"
 	proxyAddr := "127.0.0.1:" + portIsClientClosedSpin
 
-	createToxiproxy(t, proxyName, "0.0.0.0:"+portIsClientClosedSpin, "127.0.0.1:9092")
+	createToxiproxy(t, proxyName, "0.0.0.0:"+portIsClientClosedSpin, redpandaInternal)
 
 	publishDirect(t, topic, 1)
 
