@@ -34,6 +34,11 @@ type Subscriber struct {
 	subscribersWg sync.WaitGroup
 	closed        uint32 // atomic
 
+	// closingMu serializes the "check closed + Add(1)" step in Subscribe with
+	// the Wait() call in Close, so a late Subscribe cannot Add(1) after Wait()
+	// has already returned (which would be a WaitGroup misuse data race).
+	closingMu sync.Mutex
+
 	subClientsMu sync.Mutex
 	subClients   []*kgo.Client
 }
@@ -139,13 +144,17 @@ func setSubscriberDefaults(config SubscriberConfig) SubscriberConfig {
 // that was delivered but not yet Acked may be redelivered to this or another consumer.
 // Handlers must be idempotent.
 func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *message.Message, error) {
+	s.closingMu.Lock()
 	if atomic.LoadUint32(&s.closed) == 1 {
+		s.closingMu.Unlock()
 		return nil, errors.New("subscriber closed")
 	}
-
 	if atomic.LoadUint32(&s.stopped) == 1 {
+		s.closingMu.Unlock()
 		return nil, errors.New("subscriber stopped")
 	}
+	s.subscribersWg.Add(1)
+	s.closingMu.Unlock()
 
 	// Create a new client for this subscription to ensure isolation.
 	// Dedicated clients are used to prevent cross-topic message "stealing"
@@ -164,6 +173,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 
 	client, err := kgo.NewClient(opts...)
 	if err != nil {
+		s.subscribersWg.Done()
 		return nil, fmt.Errorf("cannot create kafka client: %w", err)
 	}
 
@@ -172,15 +182,23 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 	s.subClientsMu.Unlock()
 
 	output := make(chan *message.Message)
-	s.subscribersWg.Add(1)
 
 	go func() {
 		defer s.subscribersWg.Done()
 		defer close(output)
-		// Close the client when the goroutine exits so it leaves the consumer group
-		// immediately (e.g. on context cancellation). kgo.Client.Close is idempotent,
-		// so the additional close in Subscriber.Close is safe.
 		defer client.Close()
+		defer func() {
+			s.subClientsMu.Lock()
+			for i, c := range s.subClients {
+				if c == client {
+					s.subClients[i] = s.subClients[len(s.subClients)-1]
+					s.subClients[len(s.subClients)-1] = nil
+					s.subClients = s.subClients[:len(s.subClients)-1]
+					break
+				}
+			}
+			s.subClientsMu.Unlock()
+		}()
 
 		// Create a context that is cancelled when the subscriber is closing
 		runCtx, cancel := context.WithCancel(ctx)
@@ -203,21 +221,13 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 		}
 
 		for {
-			client.AllowRebalance()
 			fetches := client.PollFetches(runCtx)
 
-			// Check if we should exit
 			if fetches.IsClientClosed() {
-				select {
-				case <-s.closing:
-					// Subscriber is closing, exit gracefully
-					return
-				default:
-					// Client closed but subscriber not - this can happen during startup
-					// or reconnection. Wait a bit and continue polling to allow recovery.
-					time.Sleep(100 * time.Millisecond)
-					continue
-				}
+				// kgo.Client was closed (by Close() or unexpectedly). Either way the
+				// goroutine must exit — polling a closed client returns immediately and
+				// would spin indefinitely otherwise.
+				return
 			}
 
 			if runCtx.Err() != nil {
@@ -227,11 +237,9 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 			// Handle errors - log them but still process any valid records in this fetch.
 			// A single fetch can contain both errors and valid records.
 			for _, err := range fetches.Errors() {
-				// Skip context canceled errors (normal shutdown)
-				if err.Err == context.Canceled {
+				if errors.Is(err.Err, context.Canceled) || errors.Is(err.Err, context.DeadlineExceeded) {
 					continue
 				}
-				// Log all errors but don't exit - franz-go handles retries internally
 				s.logger.Debug("Fetch error", watermill.LogFields{
 					"error":     err.Err.Error(),
 					"topic":     err.Topic,
@@ -249,21 +257,29 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 
 				msg, err := s.config.Unmarshaler.Unmarshal(record)
 				if err != nil {
-					s.logger.Error("Cannot unmarshal message", err, nil)
+					s.logger.Error("Cannot unmarshal message", err, watermill.LogFields{
+						"topic":     record.Topic,
+						"partition": record.Partition,
+						"offset":    record.Offset,
+					})
+					if s.config.OnUnmarshalError == nil {
+						return
+					}
+					if cbErr := s.config.OnUnmarshalError(runCtx, record, err); cbErr != nil {
+						return
+					}
+					client.MarkCommitRecords(record)
+					if s.config.DisableAutoCommit {
+						commitCtx, commitCancel := context.WithTimeout(context.Background(), s.config.CommitTimeout)
+						if commitErr := client.CommitRecords(commitCtx, record); commitErr != nil {
+							s.logger.Error("Cannot commit offset for skipped record", commitErr, nil)
+						}
+						commitCancel()
+					}
 					continue
 				}
 
-				// Enrich context with Kafka metadata
-				// Use context.WithoutCancel to preserve values but avoid carrying over cancellation
-				recordCtx := ContextWithPartition(context.WithoutCancel(runCtx), record.Partition)
-				recordCtx = ContextWithOffset(recordCtx, record.Offset)
-				recordCtx = ContextWithTimestamp(recordCtx, record.Timestamp)
-				recordCtx = ContextWithKey(recordCtx, record.Key)
-
-				msgCtx, cancelMsg := context.WithCancel(recordCtx)
-				msg.SetContext(msgCtx)
-
-				if err := s.handleMessage(runCtx, client, msg, output, record, cancelMsg); err != nil {
+				if err := s.handleMessage(runCtx, client, msg, output, record); err != nil {
 					return
 				}
 			}
@@ -335,15 +351,26 @@ func (s *Subscriber) subscriberOptions(topic string) []kgo.Opt {
 	return opts
 }
 
+func buildMsgCtx(base context.Context, record *kgo.Record) (context.Context, context.CancelFunc) {
+	// Preserve metadata values from base without carrying its cancellation, then
+	// add a fresh cancel so handlers can observe shutdown via msg.Context().Done().
+	recordCtx := ContextWithPartition(context.WithoutCancel(base), record.Partition)
+	recordCtx = ContextWithOffset(recordCtx, record.Offset)
+	recordCtx = ContextWithTimestamp(recordCtx, record.Timestamp)
+	recordCtx = ContextWithKey(recordCtx, record.Key)
+	return context.WithCancel(recordCtx)
+}
+
 func (s *Subscriber) handleMessage(
 	ctx context.Context,
 	client *kgo.Client,
 	msg *message.Message,
 	output chan *message.Message,
 	record *kgo.Record,
-	cancel context.CancelFunc,
 ) error {
-	defer cancel()
+	msgCtx, cancelMsg := buildMsgCtx(ctx, record)
+	msg.SetContext(msgCtx)
+	defer cancelMsg()
 
 ResendLoop:
 	for {
@@ -357,34 +384,26 @@ ResendLoop:
 
 		select {
 		case <-msg.Acked():
-			// Mark for commit
 			client.MarkCommitRecords(record)
-
-			// Manual commit if auto-commit disabled
 			if s.config.DisableAutoCommit {
 				commitCtx, commitCancel := context.WithTimeout(context.Background(), s.config.CommitTimeout)
-				if err := client.CommitRecords(commitCtx, record); err != nil {
-					s.logger.Error("Cannot commit offset", err, nil)
-				}
+				commitErr := client.CommitRecords(commitCtx, record)
 				commitCancel()
+				if commitErr != nil {
+					s.logger.Error("Cannot commit offset", commitErr, nil)
+					return commitErr
+				}
 			}
 			break ResendLoop
 
 		case <-msg.Nacked():
-			msg = msg.Copy()
-			msg.SetContext(ContextWithPartition(
-				ContextWithOffset(
-					ContextWithTimestamp(
-						ContextWithKey(context.WithoutCancel(ctx), record.Key),
-						record.Timestamp,
-					),
-					record.Offset,
-				),
-				record.Partition,
-			))
+			cancelMsg() // cancel the previous message context before replacing it
 			if s.config.NackResendSleep > 0 {
 				time.Sleep(s.config.NackResendSleep)
 			}
+			msg = msg.Copy()
+			msgCtx, cancelMsg = buildMsgCtx(ctx, record)
+			msg.SetContext(msgCtx)
 			continue ResendLoop
 
 		case <-s.closing:
@@ -427,6 +446,14 @@ func (s *Subscriber) Close() error {
 
 	s.logger.Debug("Subscriber: closing subscriber", nil)
 	close(s.closing)
+
+	// Fence: any concurrent Subscribe that saw closed=0 has either:
+	//   (a) already called Add(1) and released closingMu, or
+	//   (b) not yet acquired closingMu and will see closed=1 when it does.
+	// Either way, after this lock/unlock, Wait() sees the correct counter.
+	s.closingMu.Lock()
+	s.closingMu.Unlock() //nolint:staticcheck // intentional fence
+
 	s.subscribersWg.Wait()
 
 	s.subClientsMu.Lock()

@@ -101,10 +101,13 @@ config := kafka.SubscriberConfig{
     HeartbeatInterval:      3 * time.Second,
     SessionTimeout:         45 * time.Second,
     AutoCommitInterval:     5 * time.Second,
-    DisableAutoCommit:      false,
+    DisableAutoCommit:      false,           // set true for manual commits (e.g. exactly-once processors)
+    CommitTimeout:          10 * time.Second, // timeout for manual commits when DisableAutoCommit=true
     NackResendSleep:        100 * time.Millisecond,
     FetchMaxBytes:          50 << 20, // 50MB
     ClientID:               "my-app",
+    // OnUnmarshalError: nil (default) = fail fast on poison pills
+    // OnUnmarshalError: kafka.SkipUnmarshalErrorHandler(logger) = skip and continue
 }
 ```
 
@@ -123,6 +126,49 @@ func (m MyMarshaler) Unmarshal(record *kgo.Record) (*message.Message, error) {
     // Custom deserialization logic
 }
 ```
+
+### Auto-Creating Topics
+
+The subscriber implements Watermill's `SubscribeInitializer` interface. Call `SubscribeInitialize` to create the topic before consuming (idempotent — a no-op if the topic already exists):
+
+```go
+err := subscriber.SubscribeInitialize("my-topic")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+Partition count and replication factor are controlled by `InitializeTopicPartitions` and `InitializeTopicReplicationFactor` on `SubscriberConfig` (both default to 1).
+
+### Poison Pill Handling (Unmarshal Errors)
+
+By default, if a Kafka record cannot be unmarshalled, the subscriber **fails fast**: it logs the error and stops the goroutine without committing the offset. The record is redelivered on the next startup. This is the safe default for financial systems.
+
+> **BREAKING CHANGE (v0.x → current):** Previous versions silently committed and skipped unprocessable records. To restore that behavior, set `OnUnmarshalError` to `SkipUnmarshalErrorHandler`.
+
+Configure via `SubscriberConfig.OnUnmarshalError`:
+
+```go
+// Default (nil): fail fast — subscriber stops, offset not committed, record redelivered.
+config := kafka.DefaultSubscriberConfig()
+// config.OnUnmarshalError is nil → fail-fast
+
+// Skip and continue (previous behavior):
+config.OnUnmarshalError = kafka.SkipUnmarshalErrorHandler(logger)
+
+// Custom handler (e.g. send to DLQ):
+config.OnUnmarshalError = func(ctx context.Context, record *kgo.Record, err error) error {
+    // publish record.Value to a dead-letter topic, then return nil to skip
+    return dlqPublisher.Publish(ctx, record, err)
+    // or return err to stop the subscriber
+}
+```
+
+| `OnUnmarshalError` return value | Behavior |
+|---|---|
+| Field is `nil` (default) | Fail fast: log error, stop goroutine, no commit — record redelivered |
+| Callback returns `nil` | Skip: commit offset, continue to next record |
+| Callback returns non-nil error | Stop: log error, stop goroutine, no commit |
 
 ### Context Metadata
 
@@ -174,24 +220,32 @@ config.TLS = &tls.Config{
 
 ## Testing
 
-Start Kafka with Docker Compose:
+Tests are organised in three layers. See [TESTING.md](TESTING.md) for the full methodology.
+
+| Layer | What | Location | Needs broker |
+|---|---|---|---|
+| Unit | Config, marshaling, state machines | `pkg/kafka/*_test.go` | No |
+| Watermill compliance | `message.Publisher` / `message.Subscriber` contract via watermill's test suite | `pkg/kafka/*_integration_test.go` | Yes |
+| Kafka behaviour | At-least-once delivery, network faults, rebalancing, poison pills | `tests/integration/` | Yes + Toxiproxy |
+
+**Any file that requires a broker carries `//go:build integration`.  
+Running `go test ./...` without that tag is always safe — no broker, no hangs.**
+
+### Quick start
 
 ```bash
-docker-compose up -d
+# Unit tests — no broker required
+make test-short
+
+# All tests — starts Redpanda + Toxiproxy, runs, tears down
+make test
+
+# Integration tests against an already-running stack
+make docker-up && make wait-for-redpanda
+make test-integration
 ```
 
-Run tests:
-
-```bash
-# Unit tests only
-go test -short ./...
-
-# All tests (requires Kafka)
-go test ./...
-
-# With race detector
-go test -race ./...
-```
+The stack uses [Redpanda](https://redpanda.com) (Kafka-compatible, ~2 s startup) and [Toxiproxy](https://github.com/Shopify/toxiproxy) for network-fault injection.
 
 ## Why Franz-Go?
 

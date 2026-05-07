@@ -1,60 +1,18 @@
 package kafka
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func TestSubscribeInitialize_CreatesTopic(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	config := DefaultSubscriberConfig()
-	config.Brokers = []string{"127.0.0.1:9092"}
-
-	logger := watermill.NewStdLogger(false, false)
-	subscriber, err := NewSubscriber(config, logger)
-	require.NoError(t, err)
-	defer func() { _ = subscriber.Close() }()
-
-	topic := "test-subscribe-initialize-" + watermill.NewUUID()
-
-	// Initialize the topic
-	err = subscriber.SubscribeInitialize(topic)
-	require.NoError(t, err)
-
-	// Verify topic was created by initializing again (should not error)
-	err = subscriber.SubscribeInitialize(topic)
-	require.NoError(t, err)
-}
-
-func TestSubscribeInitialize_TopicAlreadyExists(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	config := DefaultSubscriberConfig()
-	config.Brokers = []string{"127.0.0.1:9092"}
-
-	logger := watermill.NewStdLogger(false, false)
-	subscriber, err := NewSubscriber(config, logger)
-	require.NoError(t, err)
-	defer func() { _ = subscriber.Close() }()
-
-	topic := "test-subscribe-initialize-existing-" + watermill.NewUUID()
-
-	// Create topic first time
-	err = subscriber.SubscribeInitialize(topic)
-	require.NoError(t, err)
-
-	// Second call should not error - topic already exists
-	err = subscriber.SubscribeInitialize(topic)
-	require.NoError(t, err)
-}
+// Unit tests for Subscriber — no broker required.
+// Broker-required tests live in subscriber_integration_test.go.
 
 func TestSubscribeInitialize_ClosedSubscriber(t *testing.T) {
 	config := DefaultSubscriberConfig()
@@ -64,11 +22,9 @@ func TestSubscribeInitialize_ClosedSubscriber(t *testing.T) {
 	subscriber, err := NewSubscriber(config, logger)
 	require.NoError(t, err)
 
-	// Close the subscriber
 	err = subscriber.Close()
 	require.NoError(t, err)
 
-	// Attempt to initialize after close
 	err = subscriber.SubscribeInitialize("test-topic")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "subscriber closed")
@@ -167,4 +123,40 @@ func TestStop_ThenClose(t *testing.T) {
 
 	_, err = subscriber.Subscribe(t.Context(), "test-topic")
 	assert.Error(t, err)
+}
+
+func TestSkipUnmarshalErrorHandler_ReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	logger := watermill.NewStdLogger(false, false)
+	handler := SkipUnmarshalErrorHandler(logger)
+
+	record := &kgo.Record{Topic: "test-topic", Partition: 0, Offset: 42}
+	unmarshalErr := errors.New("invalid protobuf payload")
+
+	result := handler(context.Background(), record, unmarshalErr)
+	assert.NoError(t, result, "SkipUnmarshalErrorHandler must return nil to signal skip")
+}
+
+func TestUnmarshalErrorHandler_ErrorReturn_StopsSubscriber(t *testing.T) {
+	t.Parallel()
+
+	sentinel := errors.New("DLQ unavailable, stop consumer")
+	handler := UnmarshalErrorHandler(func(_ context.Context, _ *kgo.Record, _ error) error {
+		return sentinel
+	})
+
+	record := &kgo.Record{Topic: "test-topic", Partition: 1, Offset: 7}
+	unmarshalErr := errors.New("bad message")
+
+	result := handler(context.Background(), record, unmarshalErr)
+	assert.ErrorIs(t, result, sentinel, "handler returning non-nil must propagate error to stop the subscriber goroutine")
+}
+
+func TestOnUnmarshalError_DefaultIsNil(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultSubscriberConfig()
+	assert.Nil(t, cfg.OnUnmarshalError,
+		"OnUnmarshalError must default to nil (fail-fast) — silent skip must be opt-in")
 }

@@ -1,4 +1,4 @@
-.PHONY: help test test-integration test-short lint tidy docker-up docker-down wait-for-kafka act check-deps
+.PHONY: help test test-integration test-short lint tidy docker-up docker-up-redpanda docker-down wait-for-kafka wait-for-redpanda act check-deps
 
 # Variables
 GOLANGCI_LINT := $(shell which golangci-lint 2>/dev/null || echo "$(GOPATH)/bin/golangci-lint")
@@ -18,14 +18,17 @@ help:
 	@echo "$(BLUE)Watermill Kafka Franz - Available targets:$(NC)"
 	@echo ""
 	@echo "$(GREEN)Development:$(NC)"
-	@echo "  make test           - Run all tests (requires Kafka)"
-	@echo "  make test-short     - Run unit tests only (no Kafka required)"
-	@echo "  make lint           - Run golangci-lint"
-	@echo "  make tidy           - Tidy go modules"
+	@echo "  make test              - Run all tests (starts Redpanda, runs, stops)"
+	@echo "  make test-integration  - Run compliance + behaviour tests (requires Redpanda running)"
+	@echo "  make test-short        - Run unit tests only — no broker, no build tag"
+	@echo "  make lint              - Run golangci-lint"
+	@echo "  make tidy              - Tidy go modules"
 	@echo ""
 	@echo "$(GREEN)Docker:$(NC)"
-	@echo "  make docker-up      - Start Kafka for integration tests"
-	@echo "  make docker-down    - Stop Kafka"
+	@echo "  make docker-up-redpanda - Start Redpanda + Toxiproxy for integration tests"
+	@echo "  make docker-up          - Alias for docker-up-redpanda"
+	@echo "  make docker-down        - Stop all containers"
+	@echo "  make wait-for-redpanda  - Wait until Redpanda is healthy"
 	@echo ""
 	@echo "$(GREEN)CI:$(NC)"
 	@echo "  make act            - Run GitHub Actions locally (requires act)"
@@ -47,7 +50,7 @@ check-deps:
 	@echo ""
 
 # Run GitHub Actions locally with act
-act: check-act docker-up wait-for-kafka
+act: check-act docker-up-redpanda wait-for-redpanda
 	@echo "$(BLUE)Running GitHub Actions locally using catthehacker/ubuntu:act-latest image...$(NC)"
 	@if [ -x "$(ACT)" ]; then \
 		$(ACT) push --job lint -P ubuntu-latest=catthehacker/ubuntu:act-latest; \
@@ -85,14 +88,25 @@ check-lint:
 		exit 1; \
 	fi
 
-# Run all tests (including integration)
-test: docker-up wait-for-kafka
-	go test -v -race ./...
+# Run all tests (including integration) — starts Redpanda, runs, tears down
+test: docker-up-redpanda wait-for-redpanda
+	go test -v -race -tags integration ./...
 	$(MAKE) docker-down
 
-# Run unit tests only (skips integration tests)
+# Run integration-tagged tests against an already-running Redpanda.
+# Covers both layers:
+#   pkg/kafka/          — watermill compliance tests (*_integration_test.go)
+#   tests/integration/  — Kafka behaviour tests (at-least-once, network faults, …)
+test-integration:
+	@echo "$(BLUE)Running integration tests (requires Redpanda at 127.0.0.1:9092)...$(NC)"
+	go test -v -race -tags integration ./...
+	@echo "$(GREEN)Integration tests complete.$(NC)"
+
+# Run unit tests only — no broker required.
+# Integration tests are excluded automatically because they carry the
+# //go:build integration tag and no -tags flag is passed here.
 test-short:
-	go test -v -short ./...
+	go test -v ./pkg/kafka/...
 
 # Run golangci-lint
 lint: check-lint
@@ -102,16 +116,23 @@ lint: check-lint
 tidy:
 	go mod tidy
 
-# Start Kafka for integration tests
-docker-up:
+# Start Redpanda + Toxiproxy for integration tests
+docker-up-redpanda:
+	@echo "$(BLUE)Starting Redpanda + Toxiproxy...$(NC)"
 	docker compose up -d
 
-# Wait for Kafka to be ready
-wait-for-kafka:
-	@echo "$(BLUE)Waiting for Kafka to be ready...$(NC)"
-	@timeout 120s bash -c 'until [ "$$(docker inspect -f "{{.State.Health.Status}}" watermill-kafka-broker 2>/dev/null)" = "healthy" ]; do sleep 2; done'
-	@echo "$(GREEN)Kafka is ready!$(NC)"
+# Alias kept for backwards compatibility
+docker-up: docker-up-redpanda
 
-# Stop Kafka
+# Wait for Redpanda to be healthy (checks port 9092 and container health)
+wait-for-redpanda:
+	@echo "$(BLUE)Waiting for Redpanda to be ready...$(NC)"
+	@timeout 120s bash -c 'until [ "$$(docker inspect -f "{{.State.Health.Status}}" watermill-redpanda 2>/dev/null)" = "healthy" ]; do sleep 2; done'
+	@echo "$(GREEN)Redpanda is ready!$(NC)"
+
+# Backwards-compatible alias
+wait-for-kafka: wait-for-redpanda
+
+# Stop all containers
 docker-down:
 	docker compose down
