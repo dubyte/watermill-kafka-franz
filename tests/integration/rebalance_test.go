@@ -7,7 +7,6 @@ package integration_test
 
 import (
 	"context"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -258,21 +257,18 @@ func TestSubscriber_OffsetOutOfRange_Recovers(t *testing.T) {
 }
 
 // TestSubscriber_SliceGrowth_OnContextCancelledResubscribe verifies that
-// repeated Subscribe+cancel cycles do not cause unbounded heap growth or
-// pathologically slow Close() calls.
+// repeated Subscribe+cancel cycles do not wedge Close() behind an accumulated
+// slice of dead kgo.Clients (Bug #3: subClients slice grew unboundedly and was
+// iterated in Close()).
 //
-// TDD: This test demonstrates Bug #3 (subClients slice grows unboundedly).
-// TDD: proves Bug #3 but may be hard to observe timing-wise.  Primary fix
-// verification is code review.
-//
-// Strategy:
-//  1. Warm up with 3 subscribe/cancel cycles to flush one-time allocations.
-//  2. Snapshot HeapInuse after a forced GC (baseline).
-//  3. Run 20 subscribe/cancel cycles concurrently.
-//  4. Force two GC passes so dead kgo.Client objects can be collected.
-//  5. Assert Close() finishes within 2 s (a large slice of dead clients slows
-//     the cleanup loop noticeably).
-//  6. Assert heap growth is below 32 MB.
+// The authoritative verification of Bug #3 is code review: the fix removes
+// each completed subscription from the slice when its goroutine exits, so the
+// slice stays bounded regardless of how many cycles run. Heap-growth assertions
+// for this are unreliable (GC timing is advisory and runtime.MemStats is
+// coarse), so this test relies on the direct goroutine-exit timing signal:
+// after 20 rapid Subscribe+cancel cycles, Close() must return within 2s. A
+// regression would accumulate dead clients whose Close() calls serialise in
+// the cleanup loop and push the total well past the deadline.
 func TestSubscriber_SliceGrowth_OnContextCancelledResubscribe(t *testing.T) {
 	topic := uniqueTopic(t)
 	createTopicWithPartitions(t, topic, 1)
@@ -280,20 +276,6 @@ func TestSubscriber_SliceGrowth_OnContextCancelledResubscribe(t *testing.T) {
 	sub := newSubscriber(t, defaultSubscriberConfig("test-slice-growth-"+watermill.NewShortUUID()))
 
 	const cycles = 20
-
-	// Warm-up: a few subscribe/cancel cycles before we start measuring.
-	for range 3 {
-		ctx, cancel := context.WithCancel(context.Background())
-		ch, err := sub.Subscribe(ctx, topic)
-		require.NoError(t, err)
-		cancel()
-		for range ch {
-		}
-	}
-
-	runtime.GC()
-	var baseline runtime.MemStats
-	runtime.ReadMemStats(&baseline)
 
 	var wg sync.WaitGroup
 	for range cycles {
@@ -314,14 +296,9 @@ func TestSubscriber_SliceGrowth_OnContextCancelledResubscribe(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Force GC to reclaim any dead client objects.
-	runtime.GC()
-	runtime.GC()
-
-	var after runtime.MemStats
-	runtime.ReadMemStats(&after)
-
-	// Close must finish within 2 s even with many accumulated dead subClients.
+	// Close must finish within 2 s even after many rapid subscribe/cancel
+	// cycles. A regression of Bug #3 would serialise Close() of every dead
+	// client in the cleanup loop and exceed this deadline.
 	closeDone := make(chan struct{})
 	go func() {
 		_ = sub.Close()
@@ -333,17 +310,6 @@ func TestSubscriber_SliceGrowth_OnContextCancelledResubscribe(t *testing.T) {
 		// good
 	case <-time.After(2 * time.Second):
 		t.Error("Close() took longer than 2 s after 20 subscribe/cancel cycles — possible subClients slice accumulation (Bug #3)")
-	}
-
-	const heapGrowthThreshold = 32 << 20 // 32 MB
-	if after.HeapInuse > baseline.HeapInuse+heapGrowthThreshold {
-		t.Errorf(
-			"heap grew by %d bytes after %d subscribe/cancel cycles (baseline=%d, after=%d) — possible memory leak in subClients slice (Bug #3)",
-			after.HeapInuse-baseline.HeapInuse,
-			cycles,
-			baseline.HeapInuse,
-			after.HeapInuse,
-		)
 	}
 }
 

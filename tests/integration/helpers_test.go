@@ -21,7 +21,7 @@ import (
 )
 
 // shortUUID returns the first 8 characters of a new watermill UUID.
-// redpandaAddr, toxiproxyAPI, and toxiproxyKafka are declared in testmain_test.go.
+// redpandaAddr and toxiproxyAPI are declared in testmain_test.go.
 func shortUUID() string {
 	return watermill.NewUUID()[:8]
 }
@@ -193,13 +193,6 @@ func (poisonPillUnmarshaler) Unmarshal(record *kgo.Record) (*message.Message, er
 	}
 normal:
 	return kafka.DefaultMarshaler{}.Unmarshal(record)
-}
-
-// publishRawPoisonPill publishes a raw record with value "POISON" and no UUID
-// header, which will cause poisonPillUnmarshaler to return an error.
-func publishRawPoisonPill(t *testing.T, topic string) {
-	t.Helper()
-	publishBadMessage(t, topic, 0)
 }
 
 // ---------------------------------------------------------------------------

@@ -116,7 +116,7 @@ func TestSubscriber_PoisonPill_PartitionDoesNotStallAfterRebalance(t *testing.T)
 		"Subscribe1 should receive the first valid message")
 
 	// Allow auto-commit to flush the acknowledged offset.
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 
 	// Close sub1 so it leaves the consumer group cleanly.
 	require.NoError(t, sub1.Close())

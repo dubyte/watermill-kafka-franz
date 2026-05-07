@@ -290,29 +290,15 @@ func TestSubscriber_Network_HighLatency_NoTimeout(t *testing.T) {
 // Test 3 — Commit timeout under DisableAutoCommit (TDD: Bug #4)
 // ---------------------------------------------------------------------------
 
-// TestSubscriber_Network_CommitTimeout_UnderDisableAutoCommit is a TDD test
-// that demonstrates Bug #4: CommitRecords failure is silently swallowed.
+// TestSubscriber_Network_CommitTimeout_UnderDisableAutoCommit verifies the
+// post-fix behaviour for Bug #4: when DisableAutoCommit=true and CommitRecords
+// times out, the subscriber's handleMessage returns the commit error, the
+// goroutine exits, and the output channel is closed. Before the fix, the
+// subscriber would silently log the error and deliver msg2 anyway, advancing
+// past an uncommitted offset and silently dropping the commit failure.
 //
-// TDD: Demonstrates Bug #4 — CommitRecords failure is silently swallowed.
-//
-// When DisableAutoCommit=true the subscriber calls CommitRecords after each Ack.
-// If that call times out (network partition, broker overload) the error is only
-// logged; the subscriber continues to the next message as if the commit
-// succeeded.  Consequences:
-//
-//   - The consumer's committed offset does not advance.
-//   - On restart the broker will re-deliver msg1, causing a duplicate.
-//   - The caller has no way to know the commit failed.
-//
-// BUG PRESENT BEHAVIOUR (the assertion labelled "BUG PRESENT" passes today):
-//
-//	msg2 is delivered immediately after the timed-out commit of msg1.
-//
-// FIXED BEHAVIOUR (what the assertion should verify after the fix):
-//
-//	Either (a) the subscriber goroutine exits on commit failure, so msg2
-//	only arrives after a re-subscribe, or (b) msg1 is re-delivered before
-//	msg2 (offset not advanced means the broker serves msg1 again).
+// Regression guard: if Bug #4 is reintroduced, msg2 is delivered on the open
+// channel and the `ok` assertion below fires.
 func TestSubscriber_Network_CommitTimeout_UnderDisableAutoCommit(t *testing.T) {
 	if !toxiproxyAvailable() {
 		t.Skip("toxiproxy not available")
@@ -373,41 +359,27 @@ func TestSubscriber_Network_CommitTimeout_UnderDisableAutoCommit(t *testing.T) {
 	// Remove the toxic so the broker connection recovers.
 	removeToxic(t, proxyName, "commit-block")
 
-	// --- BUG PRESENT assertion -------------------------------------------------
-	// msg2 arrives immediately because the commit failure was swallowed and the
-	// subscriber moved straight to the next record.  The select timeout is short
-	// because the bug causes immediate delivery.
-	var msg2 *message.Message
+	// Post-fix assertion: the goroutine must have exited after the failed
+	// commit, closing ch. A two-value receive distinguishes a real message
+	// (ok=true) from channel-closed (ok=false). If Bug #4 is reintroduced,
+	// msg2 is delivered and `ok` is true — the assertion then fails.
 	select {
-	case msg2 = <-ch:
-		if msg2 != nil {
-			// BUG PRESENT: msg2 was delivered despite msg1's commit failing.
-			// The subscriber should have surfaced the commit error instead of
-			// silently continuing.
-			t.Log("BUG #4 present: msg2 delivered immediately after silently-swallowed CommitRecords failure")
-			msg2.Ack()
-		} else {
-			// Channel was closed because the subscriber exited on CommitRecords
-			// failure — this is the fixed behaviour (Bug #4 resolved).
-			t.Log("Channel closed after CommitRecords failure — subscriber exited cleanly (Bug #4 fixed)")
-		}
+	case m, ok := <-ch:
+		assert.False(t, ok,
+			"channel must be closed after a CommitRecords failure; instead received msg uuid=%s — Bug #4 regression",
+			func() string {
+				if m == nil {
+					return "<nil>"
+				}
+				return m.UUID
+			}())
 	case <-time.After(5 * time.Second):
-		// After the fix the subscriber should have exited or re-delivered msg1;
-		// reaching this branch means the bug is no longer present.
-		t.Log("No immediate msg2 delivery after failed commit — Bug #4 appears to be fixed")
+		t.Fatal("expected channel to be closed within 5s of the failed commit; subscriber goroutine did not exit")
 	}
 
-	// Verify the error was at least logged (valid both before and after the fix).
-	// The subscriber always logs commit errors regardless of whether it exits.
+	// The subscriber must also log the commit error before exiting.
 	assert.True(t, errLog.hasErrors(),
 		"expected at least one error log entry for the CommitRecords timeout; got none")
-
-	// Indicate the expected post-fix state clearly so reviewers know what to
-	// change when the fix lands:
-	//   assert.Nil(t, msg2,
-	//       "AFTER FIX: msg2 must NOT be delivered immediately after a failed commit")
-
-	_ = msg2
 }
 
 // ---------------------------------------------------------------------------

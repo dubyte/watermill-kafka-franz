@@ -14,10 +14,9 @@ import (
 )
 
 const (
-	redpandaAddr    = "127.0.0.1:9092"
+	redpandaAddr     = "127.0.0.1:9092"
 	redpandaInternal = "redpanda:9092" // Redpanda's address as seen from inside Docker
-	toxiproxyAPI    = "http://127.0.0.1:8474"
-	toxiproxyKafka  = "127.0.0.1:19092" // proxy port exposed by Toxiproxy for kafka
+	toxiproxyAPI     = "http://127.0.0.1:8474"
 )
 
 func TestMain(m *testing.M) {
