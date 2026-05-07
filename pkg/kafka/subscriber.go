@@ -34,6 +34,11 @@ type Subscriber struct {
 	subscribersWg sync.WaitGroup
 	closed        uint32 // atomic
 
+	// closingMu serializes the "check closed + Add(1)" step in Subscribe with
+	// the Wait() call in Close, so a late Subscribe cannot Add(1) after Wait()
+	// has already returned (which would be a WaitGroup misuse data race).
+	closingMu sync.Mutex
+
 	subClientsMu sync.Mutex
 	subClients   []*kgo.Client
 }
@@ -139,21 +144,17 @@ func setSubscriberDefaults(config SubscriberConfig) SubscriberConfig {
 // that was delivered but not yet Acked may be redelivered to this or another consumer.
 // Handlers must be idempotent.
 func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *message.Message, error) {
-	// Add to WaitGroup before the closed/stopped checks so that a concurrent
-	// Close() cannot return from subscribersWg.Wait() while this goroutine is
-	// still being born. Go's sync package requires that Add(positive) happens
-	// before any matching Wait() call sees the counter at zero.
-	s.subscribersWg.Add(1)
-
+	s.closingMu.Lock()
 	if atomic.LoadUint32(&s.closed) == 1 {
-		s.subscribersWg.Done()
+		s.closingMu.Unlock()
 		return nil, errors.New("subscriber closed")
 	}
-
 	if atomic.LoadUint32(&s.stopped) == 1 {
-		s.subscribersWg.Done()
+		s.closingMu.Unlock()
 		return nil, errors.New("subscriber stopped")
 	}
+	s.subscribersWg.Add(1)
+	s.closingMu.Unlock()
 
 	// Create a new client for this subscription to ensure isolation.
 	// Dedicated clients are used to prevent cross-topic message "stealing"
@@ -172,6 +173,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 
 	client, err := kgo.NewClient(opts...)
 	if err != nil {
+		s.subscribersWg.Done()
 		return nil, fmt.Errorf("cannot create kafka client: %w", err)
 	}
 
@@ -439,6 +441,14 @@ func (s *Subscriber) Close() error {
 
 	s.logger.Debug("Subscriber: closing subscriber", nil)
 	close(s.closing)
+
+	// Fence: any concurrent Subscribe that saw closed=0 has either:
+	//   (a) already called Add(1) and released closingMu, or
+	//   (b) not yet acquired closingMu and will see closed=1 when it does.
+	// Either way, after this lock/unlock, Wait() sees the correct counter.
+	s.closingMu.Lock()
+	s.closingMu.Unlock() //nolint:staticcheck // intentional fence
+
 	s.subscribersWg.Wait()
 
 	s.subClientsMu.Lock()
